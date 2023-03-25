@@ -1,0 +1,1317 @@
+The following is taking the entire DOM structure from my OpenAI Chat
+Playground with gpt4-32k. It contains both full-source context in the system
+prompt (immediately below), as well as an edited conversation.
+
+I edit the conversation over time. As I finish things, I delete those
+messages in order to maximize token efficiency.
+
+The following was the state of the project when I had gotten it to execute
+the first test -- a Golem file with a target to say "Hello, world!" in a
+random language.
+
+===============================================
+
+
+
+
+import { exec } from 'child_process';
+import { GolemFile, GolemTarget, isGolemTarget } from './types';
+import { ChatGPTMessage, ChatGPT_completion } from './chat_gpt';
+
+export async function executeTarget(target: string, golemFile: GolemFile): Promise&lt;void&gt; {
+  if (!golemFile[target]) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  const golemTarget = golemFile[target];
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    const messages: ChatGPTMessage[] = [
+      {
+        role: 'system',
+        content: `You are a helpful assistant that translates prompts into code.`,
+      },
+      {
+        role: 'user',
+        content: golemTarget.prompt,
+      },
+    ];
+
+    try {
+      console.log( "Trying: " + golemTarget.prompt );
+      const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo', 0.7, 0.9);
+      console.log(`AI Response: ${response}`);
+    } catch (error: any) {
+      console.error(`Error generating AI response: ${error.message}`);
+    }
+  }
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+    for (const dependency of golemTarget.dependencies) {
+      if (dependency) {
+        await executeCommand(dependency);
+      }
+    }
+  }
+}
+
+
+function executeCommand(command: string): Promise&lt;void&gt; {
+  return new Promise((resolve, reject) =&gt; {
+    exec(command, (error, stdout, stderr) =&gt; {
+      if (error) {
+        console.error(`Error executing command: ${command}`);
+        console.error(stderr);
+        reject(error);
+      } else {
+        console.log(stdout);
+        resolve();
+      }
+    });
+  });
+}src/parser.ts
+==================================
+
+
+import * as yaml from 'js-yaml';
+import { GolemFile } from './types';
+
+export function parseGolemFile(content: string): GolemFile {
+  try {
+    const parsedContent = yaml.load(content) as GolemFile;
+    return parsedContent;
+  } catch (error: any) {
+    throw new Error(`Error parsing Golem file: ${error.message}`);
+  }
+}
+src/dependencies.ts
+==================================
+
+
+import { GolemFile, isGolemTarget } from './types';
+import { GolemError } from './errors';
+
+
+export function resolveDependencies(golemFile: GolemFile): string[] {
+  const resolvedDependencies: string[] = [];
+
+  if (!golemFile.default) {
+    throw new GolemError("No default target specified");
+  }
+
+  const defaultTarget = golemFile.default;
+
+  if (isGolemTarget(defaultTarget)) {
+    const defaultDependencies = defaultTarget.dependencies;
+    if (Array.isArray(defaultDependencies)) {
+      for (const dependency of defaultDependencies) {
+        if (golemFile[dependency]) {
+          resolvedDependencies.push(...golemFile[dependency]!.dependencies);
+        } else {
+          resolvedDependencies.push(dependency);
+        }
+      }
+    }
+  }
+
+  return resolvedDependencies;
+}src/chat_gpt.ts
+==================================
+
+
+import { Configuration, OpenAIApi } from 'openai';
+
+export interface ChatGPTMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+const OPENAI_TOKEN = process.env.OPENAI_TOKEN;
+console.log( `OpenAI token: ${OPENAI_TOKEN}` );
+
+export async function ChatGPT_completion(
+  messages: ChatGPTMessage[],
+  model: "gpt-3.5-turbo" | "gpt-3.5-turbo-0301" | "gpt-4-0314" | "gpt-4-32k",
+  temperature: number = 0.7,
+  top_p: number = 0.9,
+  maxRetries: number = 3
+): Promise&lt;string&gt; {
+  const config = new Configuration({
+    apiKey: OPENAI_TOKEN,
+  });
+  const openai = new OpenAIApi(config);
+
+  for (let i = 0; i &lt; maxRetries; i++) {
+    try {
+      const completion = await openai.createChatCompletion({
+        model: model,
+        messages: messages,
+      });
+
+      return (completion.data!.choices[0]!.message?.content || "").trim();
+    } catch (error: any) {
+      if (error.response &amp;&amp; (error.response.status === 429 || (error.response.status &gt;= 500 &amp;&amp; error.response.status &lt; 600))) {
+        const resetMs = parseInt(error.response.headers['x-ratelimit-reset-requests']) || 1000;
+        const waitTime = resetMs + Math.random() * 1000;
+
+        console.warn(
+          `Rate limit or server error encountered (status: ${error.response.status}). Retrying in ${waitTime} ms...`
+        );
+
+        await new Promise((resolve) =&gt; setTimeout(resolve, waitTime));
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('Max retries reached. Request failed.');
+}src/errors.ts
+==================================
+
+
+export class GolemError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GolemError';
+  }
+}
+
+export function handleGolemError(error: GolemError): void {
+  console.error(`[${error.name}] ${error.message}`);
+}src/golem.ts
+==================================
+
+
+#!/usr/bin/env node
+import yargs from 'yargs';
+import { executeTarget } from './executor';
+import { parseGolemFile } from './parser';
+import fs from 'fs';
+import { resolveDependencies } from './dependencies';
+
+yargs
+  .command(
+    'golem [golemFile]',
+    'Run the specified Golem file or the default Golem file if none is provided.',
+    (yargs) =&gt; {
+      yargs.positional('golemFile', {
+        describe: 'Path to the Golem file',
+        default: 'Golem.yaml',
+        type: 'string',
+      });
+    },
+    async (argv) =&gt; {
+      try {
+        const golemFilePath = argv.golemFile as string;
+
+        // Read the Golem file content
+        const golemFileContent = fs.readFileSync(golemFilePath, 'utf8');
+        const golemFile = parseGolemFile(golemFileContent);
+
+        const dependencies = resolveDependencies(golemFile);
+
+        // Execute the default target
+        await executeTarget('default', golemFile);
+      } catch (error: any) {
+        console.error(`Error: ${error.message}`);
+      }
+    }
+  )
+  .demandCommand(1, 'You must provide a valid command.')
+  .help()
+  .alias('h', 'help')
+  .strict().argv;
+  src/types.ts
+==================================
+
+
+export interface GolemTarget {
+  dependencies: string[];
+  prompt?: string;
+}
+
+export type GolemFile = {
+  default: string[];
+} &amp; {
+  [target: string]: GolemTarget | undefined;
+};
+
+export function isGolemTarget(target: GolemTarget | string[] | undefined): target is GolemTarget {
+  return target !== undefined &amp;&amp; (target as GolemTarget).dependencies !== undefined;
+}
+src/index.ts
+==================================
+
+
+import { parseGolemFile } from './parser';
+import { GolemFile } from './types';
+import { resolveDependencies } from './dependencies';
+import { executeTarget } from './executor';
+import { GolemError, handleGolemError } from './errors';
+
+async function main() {
+  try {
+    // Read the Golem file content, e.g., from a file or command line input
+    const golemFileContent = '...';
+
+    const golemFile: GolemFile = parseGolemFile(golemFileContent);
+    const dependencies = resolveDependencies(golemFile);
+
+    for (const target of dependencies) {
+      await executeTarget(target, golemFile);
+    }
+  } catch (error) {
+    if (error instanceof GolemError) {
+      handleGolemError(error);
+    } else {
+      throw error;
+    }
+  }
+}
+
+main();golems/hello-world.golem
+==================================
+
+
+default:
+  dependencies:
+  prompt: "Say 'Hello, world!' in a random language."
+</textarea></div></div></div><div class="chat-pg-mobile-divider"></div><div class="chat-pg-right-wrapper"><div class="chat-pg-panel-wrapper"><div class="chat-pg-exchange-container"><div class="chat-pg-exchange"><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="0" placeholder="Enter a user message here." header="user" style="height: 864px;">I want to write an AI build system. It allows you to build (and maybe run!) things with AI. The main way it works is through a system called Golem. Golem files are something like Makefiles. A few key differences: The first line of a Beholder defines its dependencies. These dependencies can be files, directories, local Golem targets, or Golem targets that are in other directories. Example Golem file:
+
+default:
+  dependencies:
+    - transactions
+    - components
+
+
+software_overview:
+  dependencies:
+    - !node_modules
+  prompt: &gt;
+    Software design is comprised of components, interfaces and transactions.
+    Talk about how all of these pieces are designed, and fit together.  Use code
+    snippet examples with filenames, line numbers. Draw Mermaid.JS diagrams.
+
+transactions:
+  dependencies:
+    - software_overview
+  prompt: &gt;
+      Generate the names, descriptions and sequence diagrams of the major
+      transactions that flow through this application.  Use code snippet examples
+      with filenames, line numbers.  Draw Mermaid.JS diagrams."
+
+
+components:
+  dependencies:
+    - software_overview
+  prompt: &gt;
+    Generate the names, descriptions and diagrams of the major
+    components of this system.  Use code snippet examples file
+    filenames, line numbers.  Draw Mermaid.JS diagrams.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="1" placeholder="Enter a user message here." header="user" style="height: 168px;">The key ideas here:
+
+  - Extremely minimalistic syntax. Macro/makefile style.
+  - Need to be able to run macros with prompt templating (+ variables!)
+  - Macros which execute lists
+  - Ability to run targets on lists</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="2" placeholder="Enter an assistant message here." header="assistant" style="height: 288px;">In summary, the Golem system would work as follows:
+
+1. Create Golem files for each directory relevant to the build process, specifying dependencies and targets.
+2. Use minimalistic syntax for better readability and ease of use.
+3. Incorporate macros with prompt templating and variables for flexibility.
+4. Allow running targets on lists.
+
+This system will allow developers to build and run AI-based projects more efficiently by utilizing the Golem files to streamline the process. By breaking down the project into smaller, manageable parts, developers can better understand and work with the project structure. Additionally, the light-weight syntax and use of macros make it easier to maintain and modify the build process as needed.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="3" placeholder="Enter a user message here." header="user" style="height: 48px;">What other cool things could this do?</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="4" placeholder="Enter an assistant message here." header="assistant" style="height: 864px;">With the Golem AI build system, there are numerous cool possibilities to enhance the development process:
+
+1. **Automatic refactoring**: Golems could detect code smells, suggest improvements, and automatically apply refactoring patterns to enhance code quality and maintainability.
+
+2. **Optimization**: Golems could analyze the performance of your code and suggest optimizations, such as parallelization, memoization, or algorithm improvements, making your application run faster and more efficiently.
+
+3. **Dependency management**: Golems could automatically update and manage dependencies, ensuring that your project is always using the latest, most secure, and compatible libraries.
+
+4. **Code generation**: Golem could generate boilerplate code, such as class definitions, database models, and API clients based on specified templates or existing code patterns, significantly speeding up development.
+
+5. **Documentation generation**: Golems could analyze your code and automatically generate up-to-date documentation, including function descriptions, class hierarchies, and usage examples.
+
+6. **Automated testing**: Golems could generate unit, integration, and end-to-end tests based on your code's behavior, ensuring that your application is robust and bug-free.
+
+7. **Continuous integration and deployment**: Golems could integrate with CI/CD systems to automatically build, test, and deploy your application, streamlining the development process and reducing the time to market.
+
+8. **Code review assistance**: Golems could automatically review your code, identifying potential issues and suggesting improvements, making code reviews more efficient and effective.
+
+9. **Project management**: Golems could analyze your project's progress and suggest task prioritization or resource allocation, helping you manage your development process more effectively.
+
+10. **Learning and mentoring**: Golems could analyze your coding style and suggest resources, tutorials, or best practices to help you improve your skills and become a better developer. It could also be used as a teaching aid for new team members or students learning to code.
+
+These advanced features could make the Golem AI build system an invaluable tool for developers, improving productivity and code quality while reducing development time and effort.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="5" placeholder="Enter a user message here." header="user" style="height: 48px;">Give me an example of some Golem files that will perform code review on a code base with multiple components.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="6" placeholder="Enter a user message here." header="user" style="height: 864px;">Examples:
+
+
+default:
+  dependencies:
+    - transactions
+    - components
+
+
+software_overview:
+  dependencies:
+    - !node_modules
+  prompt: &gt;
+    Software design is comprised of components, interfaces and transactions.
+    Talk about how all of these pieces are designed, and fit together.  Use code
+    snippet examples with filenames, line numbers. Draw Mermaid.JS diagrams.
+
+transactions:
+  dependencies:
+    - software_overview
+  prompt: &gt;
+      Generate the names, descriptions and sequence diagrams of the major
+      transactions that flow through this application.  Use code snippet examples
+      with filenames, line numbers.  Draw Mermaid.JS diagrams."
+
+
+components:
+  dependencies:
+    - software_overview
+  prompt: &gt;
+    Generate the names, descriptions and diagrams of the major
+    components of this system.  Use code snippet examples file
+    filenames, line numbers.  Draw Mermaid.JS diagrams.
+
+Redo the examples.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="7" placeholder="Enter an assistant message here." header="assistant" style="height: 1968px;">Here are the examples of constructing an HTTP client library from an ExpressJS server using static code analysis and generation and performing code review on a code base with multiple components, re-written using the updated YAML format:
+
+`project/Golem.yaml`:
+```yaml
+default:
+  dependencies:
+    - express-server
+    - http-client-library
+```
+
+`express-server/Golem.yaml`:
+```yaml
+default:
+  dependencies:
+    - analyze_routes
+
+analyze_routes:
+  dependencies:
+    - express-server/routes/
+  prompt: &gt;
+    Analyze the ExpressJS server's routes to extract the API specification.
+```
+
+`http-client-library/Golem.yaml`:
+```yaml
+default:
+  dependencies:
+    - generate_client
+
+generate_client:
+  dependencies:
+    - ../express-server
+  prompt: &gt;
+    Generate the HTTP client library using the extracted API specification from ExpressJS routes.
+```
+
+`project/Golem.yaml` (Code review example):
+```yaml
+default:
+  dependencies:
+    - code_review_summary
+
+code_review_summary:
+  dependencies:
+    - componentA
+    - componentB
+  prompt: &gt;
+    Generate and display a summary report of code reviews for both components.
+```
+
+`componentA/Golem.yaml`:
+```yaml
+default:
+  dependencies:
+    - perform_code_review
+
+perform_code_review:
+  dependencies:
+    - src/
+  prompt: &gt;
+    Perform code review on the ComponentA source code and generate a report.
+```
+
+`componentB/Golem.yaml`:
+```yaml
+default:
+  dependencies:
+    - perform_code_review
+
+perform_code_review:
+  dependencies:
+    - src/
+  prompt: &gt;
+    Perform code review on the ComponentB source code and generate a report.
+```
+
+In these examples, the Golem files have been updated to use the new format, which includes `dependencies` and `prompt` keys. This format provides a more structured and organized representation of the build process and allows for better readability and easier modification of the Golem files.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="8" placeholder="Enter a user message here." header="user" style="height: 960px;">I want you to alter the code base to use this YAML structure.
+
+default:
+  dependencies:
+    - transactions
+    - components
+
+
+software_overview:
+  dependencies:
+    - !node_modules
+  prompt: &gt;
+    Software design is comprised of components, interfaces and transactions.
+    Talk about how all of these pieces are designed, and fit together.  Use code
+    snippet examples with filenames, line numbers. Draw Mermaid.JS diagrams.
+
+transactions:
+  dependencies:
+    - software_overview
+  prompt: &gt;
+      Generate the names, descriptions and sequence diagrams of the major
+      transactions that flow through this application.  Use code snippet examples
+      with filenames, line numbers.  Draw Mermaid.JS diagrams."
+
+
+components:
+  dependencies:
+    - software_overview
+  prompt: &gt;
+    Generate the names, descriptions and diagrams of the major
+    components of this system.  Use code snippet examples file
+    filenames, line numbers.  Draw Mermaid.JS diagrams.
+
+
+============
+
+Think about the various changes we need to make in the code base to adapt to this.
+
+Let's go. Then patches.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="9" placeholder="Enter an assistant message here." header="assistant" style="height: 1968px;">To adapt the existing codebase to use the new YAML structure, we'll need to make changes in the `parser.ts`, `dependencies.ts`, and `executor.ts` files. Here's a list of the necessary changes:
+
+1. Update the `GolemFile` interface in `types.ts` to include the new structure.
+2. Modify the `parseGolemFile` function in `parser.ts` to handle the new YAML structure.
+3. Update the `resolveDependencies` function in `dependencies.ts` to work with the new structure.
+4. Modify the `executeTarget` function in `executor.ts` to handle the new structure.
+
+Let's start by updating the `GolemFile` interface in `types.ts`:
+
+```typescript
+export interface GolemTarget {
+  dependencies: string[];
+  prompt?: string;
+}
+
+export interface GolemFile {
+  default: string[];
+  [target: string]: GolemTarget | undefined;
+}
+```
+
+Next, update the `parseGolemFile` function in `parser.ts`:
+
+```typescript
+export function parseGolemFile(content: string): GolemFile {
+  try {
+    const parsedContent = yaml.load(content) as GolemFile;
+    return parsedContent;
+  } catch (error: any) {
+    throw new Error(`Error parsing Golem file: ${error.message}`);
+  }
+}
+```
+
+Now, update the `resolveDependencies` function in `dependencies.ts`:
+
+```typescript
+export function resolveDependencies(golemFile: GolemFile): string[] {
+  const resolvedDependencies: string[] = [];
+
+  if (!golemFile.default) {
+    throw new GolemError("No default target specified");
+  }
+  const defaultTargets = golemFile.default;
+  for (const target of defaultTargets) {
+    if (golemFile[target]) {
+      resolvedDependencies.push(...golemFile[target]!.dependencies);
+    } else {
+      resolvedDependencies.push(target);
+    }
+  }
+
+  return resolvedDependencies;
+}
+```
+
+Finally, modify the `executeTarget` function in `executor.ts`:
+
+```typescript
+export async function executeTarget(target: string, golemFile: GolemFile): Promise&lt;void&gt; {
+  if (!golemFile[target]) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  const golemTarget = golemFile[target];
+
+  if (golemTarget &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    console.log(`AI Prompt: ${golemTarget.prompt}`);
+  }
+
+  if (golemTarget &amp;&amp; golemTarget.dependencies) {
+    for (const dependency of golemTarget.dependencies) {
+      await executeCommand(dependency);
+    }
+  }
+}
+```
+
+With these changes, the codebase should now be able to handle the new YAML structure.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="10" placeholder="Enter a user message here." header="user" style="height: 552px;">I think I may have made a mistake when I did those changes:
+
+src/executor.ts:11:34 - error TS2339: Property 'prompt' does not exist on type 'GolemTarget | string[]'.
+  Property 'prompt' does not exist on type 'string[]'.
+
+11   if (golemTarget &amp;&amp; golemTarget.prompt) {
+                                    ~~~~~~
+src/executor.ts:13:43 - error TS2339: Property 'prompt' does not exist on type 'GolemTarget | string[]'.
+  Property 'prompt' does not exist on type 'string[]'.
+
+13     console.log(`AI Prompt: ${golemTarget.prompt}`);
+                                             ~~~~~~
+src/executor.ts:16:34 - error TS2339: Property 'dependencies' does not exist on type 'GolemTarget | string[]'.
+  Property 'dependencies' does not exist on type 'string[]'.
+
+16   if (golemTarget &amp;&amp; golemTarget.dependencies) {
+                                    ~~~~~~~~~~~~
+src/executor.ts:17:42 - error TS2339: Property 'dependencies' does not exist on type 'GolemTarget | string[]'.
+  Property 'dependencies' does not exist on type 'string[]'.
+
+17     for (const dependency of golemTarget.dependencies) {
+                                            ~~~~~~~~~~~~</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="11" placeholder="Enter an assistant message here." header="assistant" style="height: 912px;">Apologies for the oversight. It seems that the TypeScript compiler is having trouble determining the correct type of `golemTarget`. To fix this issue, we can use type guards to ensure that the correct type is used for `golemTarget`.
+
+Let's first create a type guard function in `types.ts`:
+
+```typescript
+export function isGolemTarget(target: GolemTarget | string[]): target is GolemTarget {
+  return (target as GolemTarget).dependencies !== undefined;
+}
+```
+
+Now, update the `executeTarget` function in `executor.ts` to use the type guard:
+
+```typescript
+import { GolemFile, GolemTarget, isGolemTarget } from './types';
+
+export async function executeTarget(target: string, golemFile: GolemFile): Promise&lt;void&gt; {
+  if (!golemFile[target]) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  const golemTarget = golemFile[target];
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    console.log(`AI Prompt: ${golemTarget.prompt}`);
+  }
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+    for (const dependency of golemTarget.dependencies) {
+      await executeCommand(dependency);
+    }
+  }
+}
+```
+
+With these changes, the TypeScript compiler should no longer throw any errors.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="12" placeholder="Enter a user message here." header="user" style="height: 864px;">Oh, damn, mistyped again, I think.
+
+root@DESKTOP-DIJDUEL:~/golem# npm start golem golems/hello-world.golem
+
+&gt; golem@1.0.0 start
+&gt; ts-node src/golem.ts golem golems/hello-world.golem
+
+/root/golem/node_modules/ts-node/src/index.ts:859
+    return new TSError(diagnosticText, diagnosticCodes, diagnostics);
+           ^
+TSError: ⨯ Unable to compile TypeScript:
+src/executor.ts:12:21 - error TS2345: Argument of type 'GolemTarget | undefined' is not assignable to parameter of type 'GolemTarget | string[]'.
+  Type 'undefined' is not assignable to type 'GolemTarget | string[]'.
+
+12   if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+                       ~~~~~~~~~~~
+src/executor.ts:17:21 - error TS2345: Argument of type 'GolemTarget | undefined' is not assignable to parameter of type 'GolemTarget | string[]'.
+
+17   if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+                       ~~~~~~~~~~~
+
+    at createTSError (/root/golem/node_modules/ts-node/src/index.ts:859:12)
+    at reportTSError (/root/golem/node_modules/ts-node/src/index.ts:863:19)
+    at getOutput (/root/golem/node_modules/ts-node/src/index.ts:1077:36)
+    at Object.compile (/root/golem/node_modules/ts-node/src/index.ts:1433:41)
+    at Module.m._compile (/root/golem/node_modules/ts-node/src/index.ts:1617:30)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1329:10)
+    at Object.require.extensions.&lt;computed&gt; [as .ts] (/root/golem/node_modules/ts-node/src/index.ts:1621:12)
+    at Module.load (node:internal/modules/cjs/loader:1133:32)
+    at Function.Module._load (node:internal/modules/cjs/loader:972:12)
+    at Module.require (node:internal/modules/cjs/loader:1157:19) {
+  diagnosticCodes: [ 2345, 2345 ]
+}</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="13" placeholder="Enter an assistant message here." header="assistant" style="height: 264px;">Apologies for the confusion. It appears that the type guard function needs to be updated to account for the `undefined` case. Let's modify the `isGolemTarget` function in `types.ts` to handle this:
+
+```typescript
+export function isGolemTarget(target: GolemTarget | string[] | undefined): target is GolemTarget {
+  return target !== undefined &amp;&amp; (target as GolemTarget).dependencies !== undefined;
+}
+```
+
+Now, the `executeTarget` function in `executor.ts` should work as expected without TypeScript errors.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="14" placeholder="Enter a user message here." header="user" style="height: 720px;">root@DESKTOP-DIJDUEL:~/golem# npm start golem golems/hello-world.golem
+
+&gt; golem@1.0.0 start
+&gt; ts-node src/golem.ts golem golems/hello-world.golem
+
+/root/golem/node_modules/ts-node/src/index.ts:859
+    return new TSError(diagnosticText, diagnosticCodes, diagnostics);
+           ^
+TSError: ⨯ Unable to compile TypeScript:
+src/types.ts:7:3 - error TS2411: Property 'default' of type 'string[]' is not assignable to 'string' index type 'GolemTarget | undefined'.
+
+7   default: string[];
+    ~~~~~~~
+
+    at createTSError (/root/golem/node_modules/ts-node/src/index.ts:859:12)
+    at reportTSError (/root/golem/node_modules/ts-node/src/index.ts:863:19)
+    at getOutput (/root/golem/node_modules/ts-node/src/index.ts:1077:36)
+    at Object.compile (/root/golem/node_modules/ts-node/src/index.ts:1433:41)
+    at Module.m._compile (/root/golem/node_modules/ts-node/src/index.ts:1617:30)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1329:10)
+    at Object.require.extensions.&lt;computed&gt; [as .ts] (/root/golem/node_modules/ts-node/src/index.ts:1621:12)
+    at Module.load (node:internal/modules/cjs/loader:1133:32)
+    at Function.Module._load (node:internal/modules/cjs/loader:972:12)
+    at Module.require (node:internal/modules/cjs/loader:1157:19) {
+  diagnosticCodes: [ 2411 ]
+}
+
+I'm such a silly human. Please help me.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="15" placeholder="Enter an assistant message here." header="assistant" style="height: 336px;">No worries! We can fix this by updating the `GolemFile` interface definition. Since the `default` property has a different type compared to other properties, we can use an intersection type to define the `GolemFile` interface in `types.ts`:
+
+```typescript
+export type GolemFile = {
+  default: string[];
+} &amp; {
+  [target: string]: GolemTarget | undefined;
+};
+```
+
+This way, the `default` property has a separate type definition from the other properties, and TypeScript should not throw any errors.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="16" placeholder="Enter a user message here." header="user" style="height: 96px;">OK, so that compiles, but I've clearly still done something wrong.
+
+Error: golemFile.default is not iterable</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="17" placeholder="Enter an assistant message here." header="assistant" style="height: 696px;">My apologies for the confusion earlier. It appears that the issue is with how the `default` property is being accessed in the code.
+
+In the `resolveDependencies` function of `dependencies.ts`, we should check if `golemFile.default` exists and is iterable. We can do this by using the `Array.isArray()` method to ensure that `golemFile.default` is an array. Update the `resolveDependencies` function as follows:
+
+```typescript
+export function resolveDependencies(golemFile: GolemFile): string[] {
+  const resolvedDependencies: string[] = [];
+
+  if (!Array.isArray(golemFile.default)) {
+    throw new GolemError("No default target specified");
+  }
+  const defaultTargets = golemFile.default;
+  for (const target of defaultTargets) {
+    if (golemFile[target]) {
+      resolvedDependencies.push(...golemFile[target]!.dependencies);
+    } else {
+      resolvedDependencies.push(target);
+    }
+  }
+
+  return resolvedDependencies;
+}
+```
+
+This change should resolve the "golemFile.default is not iterable" error.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="18" placeholder="Enter a user message here." header="user" style="height: 48px;">Nuts. Still don't have it.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="19" placeholder="Enter an assistant message here." header="assistant" style="height: 1056px;">I apologize for the confusion. Let's revisit the main function in `src/golem.ts` to ensure that it processes the Golem file correctly. 
+
+Update the main function in `src/golem.ts` as follows:
+
+```typescript
+yargs
+  .command(
+    'golem [golemFile]',
+    'Run the specified Golem file or the default Golem file if none is provided.',
+    (yargs) =&gt; {
+      yargs.positional('golemFile', {
+        describe: 'Path to the Golem file',
+        default: 'Golem.yaml',
+        type: 'string',
+      });
+    },
+    async (argv) =&gt; {
+      try {
+        const golemFilePath = argv.golemFile as string;
+
+        // Read the Golem file content
+        const golemFileContent = fs.readFileSync(golemFilePath, 'utf8');
+        const golemFile = parseGolemFile(golemFileContent);
+
+        const dependencies = resolveDependencies(golemFile);
+
+        for (const target of dependencies) {
+          await executeTarget(target, golemFile);
+        }
+      } catch (error: any) {
+        console.error(`Error: ${error.message}`);
+      }
+    }
+  )
+  .demandCommand(1, 'You must provide a valid command.')
+  .help()
+  .alias('h', 'help')
+  .strict().argv;
+```
+
+If you still encounter issues, please share the content of the Golem file you are trying to run (e.g., `golems/hello-world.golem`). This will help me understand the specific problem and guide you towards the correct solution.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="20" placeholder="Enter a user message here." header="user" style="height: 744px;">Closer!
+
+root@DESKTOP-DIJDUEL:~/golem# npm start golem golems/hello-world.golem
+
+&gt; golem@1.0.0 start
+&gt; ts-node src/golem.ts golem golems/hello-world.golem
+
+/root/golem/node_modules/ts-node/src/index.ts:859
+    return new TSError(diagnosticText, diagnosticCodes, diagnostics);
+           ^
+TSError: ⨯ Unable to compile TypeScript:
+src/golem.ts:26:30 - error TS2304: Cannot find name 'resolveDependencies'.
+
+26         const dependencies = resolveDependencies(golemFile);
+                                ~~~~~~~~~~~~~~~~~~~
+
+    at createTSError (/root/golem/node_modules/ts-node/src/index.ts:859:12)
+    at reportTSError (/root/golem/node_modules/ts-node/src/index.ts:863:19)
+    at getOutput (/root/golem/node_modules/ts-node/src/index.ts:1077:36)
+    at Object.compile (/root/golem/node_modules/ts-node/src/index.ts:1433:41)
+    at Module.m._compile (/root/golem/node_modules/ts-node/src/index.ts:1617:30)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1329:10)
+    at Object.require.extensions.&lt;computed&gt; [as .ts] (/root/golem/node_modules/ts-node/src/index.ts:1621:12)
+    at Module.load (node:internal/modules/cjs/loader:1133:32)
+    at Function.Module._load (node:internal/modules/cjs/loader:972:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:83:12) {
+  diagnosticCodes: [ 2304 ]
+}
+
+Still I screwed something up.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="21" placeholder="Enter an assistant message here." header="assistant" style="height: 240px;">It looks like the `resolveDependencies` function is not being imported in the `src/golem.ts` file. To fix this, add the following import statement at the top of the `src/golem.ts` file:
+
+```typescript
+import { resolveDependencies } from './dependencies';
+```
+
+With this import statement added, the TypeScript compiler should no longer throw any errors, and the code should execute correctly.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="22" placeholder="Enter a user message here." header="user" style="height: 384px;">Cool! Now we're here:
+
+root@DESKTOP-DIJDUEL:~/golem# npm start golem golems/hello-world.golem
+
+&gt; golem@1.0.0 start
+&gt; ts-node src/golem.ts golem golems/hello-world.golem
+
+Error: No default target specified
+
+
+Here's the golem:
+
+default:
+  dependencies:
+  prompt: "Say 'Hello, world!' in a random language."</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="23" placeholder="Enter an assistant message here." header="assistant" style="height: 792px;">I see the issue now. The `default` target in the `golems/hello-world.golem` file has a `dependencies` key with no values, and it's causing the error. To fix this, you can either provide an empty array for the `dependencies` key or remove the key altogether. Here's the updated `golems/hello-world.golem`:
+
+```yaml
+default:
+  dependencies: []
+  prompt: "Say 'Hello, world!' in a random language."
+```
+
+or
+
+```yaml
+default:
+  prompt: "Say 'Hello, world!' in a random language."
+```
+
+With this change, the Golem file should be processed correctly, and you should see the AI prompt being printed to the console. Additionally, you may want to modify the `executeTarget` function in `src/executor.ts` to avoid executing commands for empty dependencies:
+
+```typescript
+if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+  for (const dependency of golemTarget.dependencies) {
+    if (dependency) {
+      await executeCommand(dependency);
+    }
+  }
+}
+```
+
+This change ensures that the `executeCommand` function is only called for non-empty dependencies.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="24" placeholder="Enter a user message here." header="user" style="height: 1008px;">I definitely bunged up executor.ts.
+
+import { exec } from 'child_process';
+
+import { GolemFile, GolemTarget, isGolemTarget } from './types';
+
+export async function executeTarget(target: string, golemFile: GolemFile): Promise&lt;void&gt; {
+  if (!golemFile[target]) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  const golemTarget = golemFile[target];
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    console.log(`AI Prompt: ${golemTarget.prompt}`);
+  }
+
+if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+  for (const dependency of golemTarget.dependencies) {
+    if (dependency) {
+      await executeCommand(dependency);
+    }
+  }
+}
+
+
+function executeCommand(command: string): Promise&lt;void&gt; {
+  return new Promise((resolve, reject) =&gt; {
+    exec(command, (error, stdout, stderr) =&gt; {
+      if (error) {
+        console.error(`Error executing command: ${command}`);
+        console.error(stderr);
+        reject(error);
+      } else {
+        console.log(stdout);
+        resolve();
+      }
+    });
+  });
+}</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="25" placeholder="Enter an assistant message here." header="assistant" style="height: 1176px;">Your updated `executor.ts` file looks correct! The `executeTarget` function now checks if the `golemTarget` is of the `GolemTarget` type, and if it has a `prompt`, it will print it to the console. It also checks if there are any dependencies and ensures that they are not empty before executing the command using the `executeCommand` function.
+
+Here's the complete updated `executor.ts` file:
+
+```typescript
+import { exec } from 'child_process';
+import { GolemFile, GolemTarget, isGolemTarget } from './types';
+
+export async function executeTarget(target: string, golemFile: GolemFile): Promise&lt;void&gt; {
+  if (!golemFile[target]) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  const golemTarget = golemFile[target];
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    console.log(`AI Prompt: ${golemTarget.prompt}`);
+  }
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+    for (const dependency of golemTarget.dependencies) {
+      if (dependency) {
+        await executeCommand(dependency);
+      }
+    }
+  }
+}
+
+function executeCommand(command: string): Promise&lt;void&gt; {
+  return new Promise((resolve, reject) =&gt; {
+    exec(command, (error, stdout, stderr) =&gt; {
+      if (error) {
+        console.error(`Error executing command: ${command}`);
+        console.error(stderr);
+        reject(error);
+      } else {
+        console.log(stdout);
+        resolve();
+      }
+    });
+  });
+}
+```
+
+With this configuration, your Golem system should work as expected when processing Golem files.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="26" placeholder="Enter a user message here." header="user" style="height: 96px;">Oh gosh, compiles again, but got:
+
+Error: No default target specified</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="27" placeholder="Enter an assistant message here." header="assistant" style="height: 936px;">It appears that the issue is related to the `resolveDependencies` function in `dependencies.ts`. It is throwing the "No default target specified" error when the `default` key is present but has no dependencies.
+
+To fix this, update the `resolveDependencies` function in `dependencies.ts` as follows:
+
+```typescript
+export function resolveDependencies(golemFile: GolemFile): string[] {
+  const resolvedDependencies: string[] = [];
+
+  if (!golemFile.default) {
+    throw new GolemError("No default target specified");
+  }
+
+  if (golemFile.default.length === 0) {
+    return resolvedDependencies;
+  }
+
+  const defaultTargets = golemFile.default;
+  for (const target of defaultTargets) {
+    if (golemFile[target]) {
+      // Use isGolemTarget to ensure we access the dependencies only when applicable
+      if (isGolemTarget(golemFile[target])) {
+        resolvedDependencies.push(...golemFile[target]!.dependencies);
+      }
+    } else {
+      resolvedDependencies.push(target);
+    }
+  }
+
+  return resolvedDependencies;
+}
+```
+
+This change ensures that if the `default` key is present but has no dependencies, the function will return an empty array of resolved dependencies instead of throwing an error.
+
+Now, when you run the `golems/hello-world.golem` file with no dependencies, it should print the AI prompt without any errors.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="28" placeholder="Enter a user message here." header="user" style="height: 192px;">I'm a dum dum:
+
+TSError: ⨯ Unable to compile TypeScript:
+src/dependencies.ts:19:11 - error TS2304: Cannot find name 'isGolemTarget'.
+
+19       if (isGolemTarget(golemFile[target])) {
+             ~~~~~~~~~~~~~</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="29" placeholder="Enter an assistant message here." header="assistant" style="height: 240px;">No worries! It looks like the `isGolemTarget` function is missing from the import statement in `dependencies.ts`. To fix this issue, add the `isGolemTarget` function to the import statement at the top of the `dependencies.ts` file:
+
+```typescript
+import { GolemFile, GolemError, isGolemTarget } from './types';
+```
+
+With this import statement added, the TypeScript compiler should no longer throw any errors, and the code should execute correctly.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="30" placeholder="Enter a user message here." header="user" style="height: 96px;">src/dependencies.ts:1:21 - error TS2305: Module '"./types"' has no exported member 'GolemError'.
+
+1 import { GolemFile, GolemError, isGolemTarget } from './types';</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="31" placeholder="Enter an assistant message here." header="assistant" style="height: 240px;">Apologies for the oversight. It seems I made a mistake with the import statement. The `GolemError` class is actually defined in `errors.ts`, not in `types.ts`. Update the import statement in `dependencies.ts` as follows:
+
+```typescript
+import { GolemFile, isGolemTarget } from './types';
+import { GolemError } from './errors';
+```
+
+Now the TypeScript compiler should not throw any errors, and the code should execute correctly.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="32" placeholder="Enter a user message here." header="user" style="height: 48px;">Error: defaultTargets is not iterable</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="33" placeholder="Enter an assistant message here." header="assistant" style="height: 840px;">I apologize for the confusion. It seems we need to update the `default` key handling in the `resolveDependencies` function in `dependencies.ts`. Since we've modified the Golem file structure, the `default` key now contains a `GolemTarget` object with `dependencies` and `prompt` keys.
+
+Let's update the `resolveDependencies` function to handle the new structure:
+
+```typescript
+export function resolveDependencies(golemFile: GolemFile): string[] {
+  const resolvedDependencies: string[] = [];
+
+  if (!golemFile.default) {
+    throw new GolemError("No default target specified");
+  }
+
+  const defaultTarget = golemFile.default;
+
+  if (isGolemTarget(defaultTarget)) {
+    const defaultDependencies = defaultTarget.dependencies;
+    for (const dependency of defaultDependencies) {
+      if (golemFile[dependency]) {
+        resolvedDependencies.push(...golemFile[dependency]!.dependencies);
+      } else {
+        resolvedDependencies.push(dependency);
+      }
+    }
+  }
+
+  return resolvedDependencies;
+}
+```
+
+This change ensures that the `default` key is properly handled as a `GolemTarget` object, and its dependencies are iterated correctly. Now, when you run the `golems/hello-world.golem` file, it should print the AI prompt without any errors.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="34" placeholder="Enter a user message here." header="user" style="height: 96px;">Error: defaultDependencies is not iterable
+
+new error!! yay</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="35" placeholder="Enter an assistant message here." header="assistant" style="height: 840px;">Apologies for the confusion. It seems we still need to make a small adjustment to handle the case when the `dependencies` key is not present or empty in the `default` target.
+
+Update the `resolveDependencies` function in `dependencies.ts` as follows:
+
+```typescript
+export function resolveDependencies(golemFile: GolemFile): string[] {
+  const resolvedDependencies: string[] = [];
+
+  if (!golemFile.default) {
+    throw new GolemError("No default target specified");
+  }
+
+  const defaultTarget = golemFile.default;
+
+  if (isGolemTarget(defaultTarget)) {
+    const defaultDependencies = defaultTarget.dependencies;
+    if (Array.isArray(defaultDependencies)) {
+      for (const dependency of defaultDependencies) {
+        if (golemFile[dependency]) {
+          resolvedDependencies.push(...golemFile[dependency]!.dependencies);
+        } else {
+          resolvedDependencies.push(dependency);
+        }
+      }
+    }
+  }
+
+  return resolvedDependencies;
+}
+```
+
+With this update, the function checks if `defaultDependencies` is an array before iterating over it. This should prevent the "defaultDependencies is not iterable" error and print the AI prompt without any issues.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="36" placeholder="Enter a user message here." header="user" style="height: 48px;">Whoa. That worked. Wow. I am glad I trusted you.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="37" placeholder="Enter an assistant message here." header="assistant" style="height: 72px;">I'm glad it worked for you! Thank you for your patience and trust. If you have any more questions or need further assistance, please don't hesitate to ask. I'm here to help!</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="38" placeholder="Enter a user message here." header="user" style="height: 1320px;">I'm going to add another file to the source code here:
+
+import { Configuration, OpenAIApi } from 'openai';
+
+export interface ChatGPTMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+const OPENAI_TOKEN = process.env.OPENAI_TOKEN;
+console.log( `OpenAI token: ${OPENAI_TOKEN}` );
+
+export async function ChatGPT_completion(
+  messages: ChatGPTMessage[],
+  model: "gpt-3.5-turbo" | "gpt-3.5-turbo-0301" | "gpt-4-0314" | "gpt-4-32k",
+  temperature: number = 0.7,
+  top_p: number = 0.9,
+  maxRetries: number = 3
+): Promise&lt;string&gt; {
+  const config = new Configuration({
+    apiKey: OPENAI_TOKEN,
+  });
+  const openai = new OpenAIApi(config);
+
+  for (let i = 0; i &lt; maxRetries; i++) {
+    try {
+      const completion = await openai.createChatCompletion({
+        model: model,
+        messages: messages,
+      });
+
+      return (completion.data!.choices[0]!.message?.content || "").trim();
+    } catch (error: any) {
+      if (error.response &amp;&amp; (error.response.status === 429 || (error.response.status &gt;= 500 &amp;&amp; error.response.status &lt; 600))) {
+        const resetMs = parseInt(error.response.headers['x-ratelimit-reset-requests']) || 1000;
+        const waitTime = resetMs + Math.random() * 1000;
+
+        console.warn(
+          `Rate limit or server error encountered (status: ${error.response.status}). Retrying in ${waitTime} ms...`
+        );
+
+        await new Promise((resolve) =&gt; setTimeout(resolve, waitTime));
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('Max retries reached. Request failed.');
+}
+
+
+What do you think about integrating it in? Do you think it could be useful?</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="39" placeholder="Enter an assistant message here." header="assistant" style="height: 1440px;">Yes, integrating this file into the Golem system could be very useful! The provided code allows you to interact with the OpenAI API to generate completions based on a series of messages using a specified model. It can be particularly helpful for generating AI-driven content based on the prompts in your Golem files.
+
+To integrate this file into the Golem system, you can follow these steps:
+
+1. Save the file as `chat_gpt.ts` in your project's `src` directory.
+2. Update the `executeTarget` function in `executor.ts` to import and use the `ChatGPT_completion` function.
+3. Replace the `console.log` statement that prints the AI prompt with a call to `ChatGPT_completion` to generate a response and display the result.
+
+Here's the updated `executeTarget` function in `src/executor.ts`:
+
+```typescript
+import { GolemFile, GolemTarget, isGolemTarget } from './types';
+import { ChatGPT_completion } from './chat_gpt';
+
+export async function executeTarget(target: string, golemFile: GolemFile): Promise&lt;void&gt; {
+  if (!golemFile[target]) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  const golemTarget = golemFile[target];
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    const messages = [
+      {
+        role: 'system',
+        content: `You are a helpful assistant that translates prompts into code.`,
+      },
+      {
+        role: 'user',
+        content: golemTarget.prompt,
+      },
+    ];
+
+    try {
+      const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo');
+      console.log(`AI Response: ${response}`);
+    } catch (error: any) {
+      console.error(`Error generating AI response: ${error.message}`);
+    }
+  }
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+    for (const dependency of golemTarget.dependencies) {
+      if (dependency) {
+        await executeCommand(dependency);
+      }
+    }
+  }
+}
+```
+
+Now, when you run a Golem file with a prompt, the Golem system will utilize your `ChatGPT_completion` function to generate a response using the OpenAI API and display the result. This integration can potentially enhance the capabilities of the Golem system by generating more context-aware and dynamic content based on the AI-driven responses.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="40" placeholder="Enter a user message here." header="user" style="height: 336px;">Cooool! Looks like we're getting close!
+
+root@DESKTOP-DIJDUEL:~/golem# npm start golem golems/hello-world.golem
+
+&gt; golem@1.0.0 start
+&gt; ts-node src/golem.ts golem golems/hello-world.golem
+
+OpenAI token: sk-qyAcepeqomyLbGq3KFN0r8EtLAdY4ZVMFY9oOeY4
+root@DESKTOP-DIJDUEL:~/golem# 
+
+I want this to return with the output of the prompt run by Chat GPT.
+
+Give me a diff back.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="41" placeholder="Enter an assistant message here." header="assistant" style="height: 840px;">It seems that the Golem system is successfully connecting to the OpenAI API, but not displaying the generated response. To fix this, let's update the `executeTarget` function in `src/executor.ts` to properly display the AI response.
+
+Here's a diff of the changes required for the `executeTarget` function in `src/executor.ts`:
+
+```diff
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    const messages = [
+      {
+        role: 'system',
+        content: `You are a helpful assistant that translates prompts into code.`,
+      },
+      {
+        role: 'user',
+        content: golemTarget.prompt,
+      },
+    ];
+
+    try {
+-      const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo');
++      const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo', 0.7, 0.9);
+      console.log(`AI Response: ${response}`);
+    } catch (error: any) {
+      console.error(`Error generating AI response: ${error.message}`);
+    }
+  }
+```
+
+In the above diff, I added the default values for `temperature` and `top_p` in the `ChatGPT_completion` function call, so the AI response should be generated and displayed correctly.
+
+With this change, running the `golems/hello-world.golem` file should now display the AI response generated by the Chat GPT model after connecting to the OpenAI API.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="42" placeholder="Enter a user message here." header="user" style="height: 1728px;">I did that, and also made my own change to add the console.log. Here's what it looks like now:
+
+import { exec } from 'child_process';
+import { GolemFile, GolemTarget, isGolemTarget } from './types';
+import { ChatGPTMessage, ChatGPT_completion } from './chat_gpt';
+
+export async function executeTarget(target: string, golemFile: GolemFile): Promise&lt;void&gt; {
+  if (!golemFile[target]) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  const golemTarget = golemFile[target];
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.prompt) {
+    // Handle AI-related tasks using the prompt
+    const messages: ChatGPTMessage[] = [
+      {
+        role: 'system',
+        content: `You are a helpful assistant that translates prompts into code.`,
+      },
+      {
+        role: 'user',
+        content: golemTarget.prompt,
+      },
+    ];
+
+    try {
+      console.log( "Trying: " + golemTarget.prompt );
+      const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo', 0.7, 0.9);
+      console.log(`AI Response: ${response}`);
+    } catch (error: any) {
+      console.error(`Error generating AI response: ${error.message}`);
+    }
+  }
+
+  if (isGolemTarget(golemTarget) &amp;&amp; golemTarget.dependencies) {
+    for (const dependency of golemTarget.dependencies) {
+      if (dependency) {
+        await executeCommand(dependency);
+      }
+    }
+  }
+}
+
+
+function executeCommand(command: string): Promise&lt;void&gt; {
+  return new Promise((resolve, reject) =&gt; {
+    exec(command, (error, stdout, stderr) =&gt; {
+      if (error) {
+        console.error(`Error executing command: ${command}`);
+        console.error(stderr);
+        reject(error);
+      } else {
+        console.log(stdout);
+        resolve();
+      }
+    });
+  });
+}
+
+And I've run it:
+
+root@DESKTOP-DIJDUEL:~/golem# npm start golem golems/hello-world.golem
+
+&gt; golem@1.0.0 start
+&gt; ts-node src/golem.ts golem golems/hello-world.golem
+
+OpenAI token: sk-qyAcepeqomyLbGq3KFN0r8EtLAdY4ZVMFY9oOeY4
+root@DESKTOP-DIJDUEL:~/golem# 
+
+So I don't think it's getting to run that.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">assistant</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="43" placeholder="Enter an assistant message here." header="assistant" style="height: 1056px;">I apologize for the confusion. It seems we need to make a small adjustment in the `src/golem.ts` file to ensure that the default target is executed correctly.
+
+Update the main function in `src/golem.ts` to execute the default target:
+
+```typescript
+yargs
+  .command(
+    'golem [golemFile]',
+    'Run the specified Golem file or the default Golem file if none is provided.',
+    (yargs) =&gt; {
+      yargs.positional('golemFile', {
+        describe: 'Path to the Golem file',
+        default: 'Golem.yaml',
+        type: 'string',
+      });
+    },
+    async (argv) =&gt; {
+      try {
+        const golemFilePath = argv.golemFile as string;
+
+        // Read the Golem file content
+        const golemFileContent = fs.readFileSync(golemFilePath, 'utf8');
+        const golemFile = parseGolemFile(golemFileContent);
+
+        const dependencies = resolveDependencies(golemFile);
+
+        // Execute the default target
+        await executeTarget('default', golemFile);
+      } catch (error: any) {
+        console.error(`Error: ${error.message}`);
+      }
+    }
+  )
+  .demandCommand(1, 'You must provide a valid command.')
+  .help()
+  .alias('h', 'help')
+  .strict().argv;
+```
+
+With this change, the Golem system should now execute the default target when running the `golems/hello-world.golem` file, and you should see the AI response generated by the Chat GPT model after connecting to the OpenAI API.</textarea></div><div class="chat-message-button-container"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" class="chat-message-remove-button" width="20" height="20"><path d="M10 16.6667C13.6819 16.6667 16.6667 13.6819 16.6667 10C16.6667 6.31811 13.6819 3.33334 10 3.33334C6.31814 3.33334 3.33337 6.31811 3.33337 10C3.33337 13.6819 6.31814 16.6667 10 16.6667Z" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><path d="M7.33337 10H12.6667" stroke="#6E6E80" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg></div></div><div class="chat-pg-message"><div class="chat-message-role"><div class="chat-message-subheading subheading"><span class="chat-message-role-text">user</span></div></div><div class="text-input-with-focus"><textarea class="text-input text-input-md text-input" rows="1" tabindex="44" placeholder="Enter a user message here." header="user" style="height: 288px;">Beautiful experience. Thank-you.
+
+root@DESKTOP-DIJDUEL:~/golem# npm start golem golems/hello-world.golem
+
+&gt; golem@1.0.0 start
+&gt; ts-node src/golem.ts golem golems/hello-world.golem
+
+OpenAI token: sk-qyAcepeqomyLbGq3KFN0r8EtLAdY4ZVMFY9oOeY4
+Trying: Say 'Hello, world!' in a random language.
+AI Response: こんにちは世界! (Konnichiwa sekai!) - This is Japanese for "Hello, world!"
+root@DESKTOP-DIJDUEL:~/golem#
