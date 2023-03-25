@@ -1,0 +1,387 @@
+src/executor.ts
+==================================
+
+
+import { exec } from 'child_process';
+import { GolemFile, GolemTarget, isGolemTarget } from './types';
+import { ChatGPTMessage, ChatGPT_completion } from './chat_gpt';
+
+interface ExecutionContext {
+  [key: string]: any;
+}
+
+export async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
+  const golemTarget = golemFile[target];
+
+  if (!golemTarget) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+
+  console.log(`Executing target: ${target}`); // Log the current target being executed
+
+  if (golemTarget.dependencies) {
+    console.log(`Dependencies for ${target}: ${golemTarget.dependencies}`); // Log the dependencies for the current target
+    for (const dependency of golemTarget.dependencies) {
+      if (dependency) {
+        // Execute the dependency and update the context with its result
+        await executeTarget(dependency, golemFile, context);
+      }
+    }
+  }
+
+  // Call the executeAIChat function for the current target
+  await executeAIChat(target, golemFile, context);
+
+  console.log(`Context after ${target} execution:`, context); // Log the context after the current target's execution
+}
+
+function executeCommand(command: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`Error executing command: ${command}`);
+        console.error(stderr);
+        reject(error);
+      } else {
+        console.log(stdout);
+        resolve();
+      }
+    });
+  });
+}
+
+async function executeAIChat(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
+  console.log("================================");
+  console.log( target );
+  console.log( golemFile );
+  console.log( context );
+
+
+  const golemTarget = golemFile[target];
+
+  let prompt = golemTarget?.prompt ?? "{no prompt}";
+  console.log( golemTarget?.prompt ?? "{no prompt}" );
+  console.log("================================");
+
+/*  const prompt = isGolemTarget(golemTarget) && golemTarget.prompt
+    ? golemTarget.prompt.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+        return context.has(key) ? context.get(key) : '';
+      })
+    : '';
+*/
+  console.log(`Prompt for ${target}: ${prompt}`); // Log the prompt for the current target
+
+  const messages: ChatGPTMessage[] = [
+    {
+      role: 'system',
+      content: `You are a helpful assistant!`,
+    },
+    {
+      role: 'user',
+      content: prompt,
+    },
+  ];
+
+  try {
+    const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo', 0.7, 0.9);
+    console.log(`AI Response for ${target}: ${response}`); // Log the AI response for the current target
+
+    if (!response) {
+      console.log(`No AI response for ${target}. Storing default value.`); // Log when there is no AI response for the current target
+      context.set(target, `Default value for ${target}`); // Store the default value in the context
+    } else {
+      context.set(target, response); // Store the AI response in the context
+    }
+
+    console.log(`Context after ${target} AI chat:`, context); // Log the context after the AI chat for the current target
+  } catch (error: any) {
+    console.error(`Error generating AI response: ${error.message}`);
+  }
+}
+src/parser.ts
+==================================
+
+
+import * as yaml from 'js-yaml';
+import { GolemFile } from './types';
+
+export function parseGolemFile(content: string): GolemFile {
+  try {
+    const parsedContent = yaml.load(content) as GolemFile;
+    return parsedContent;
+  } catch (error: any) {
+    throw new Error(`Error parsing Golem file: ${error.message}`);
+  }
+}
+src/dependencies.ts
+==================================
+
+
+import { GolemFile, isGolemTarget } from './types';
+import { GolemError } from './errors';
+
+
+export function resolveDependencies(golemFile: GolemFile): string[] {
+  const resolvedDependencies: string[] = [];
+
+  if (!golemFile.default) {
+    throw new GolemError("No default target specified");
+  }
+
+  const defaultTarget = golemFile.default;
+
+  if (isGolemTarget(defaultTarget)) {
+    const defaultDependencies = defaultTarget.dependencies;
+    if (Array.isArray(defaultDependencies)) {
+      for (const dependency of defaultDependencies) {
+        if (golemFile[dependency]) {
+          resolvedDependencies.push(...golemFile[dependency]!.dependencies);
+        } else {
+          resolvedDependencies.push(dependency);
+        }
+      }
+    }
+  }
+
+  return resolvedDependencies;
+}src/chat_gpt.ts
+==================================
+
+
+import { Configuration, OpenAIApi } from 'openai';
+
+export interface ChatGPTMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+const OPENAI_TOKEN = process.env.OPENAI_TOKEN;
+console.log( `OpenAI token: ${OPENAI_TOKEN}` );
+
+export async function ChatGPT_completion(
+  messages: ChatGPTMessage[],
+  model: "gpt-3.5-turbo" | "gpt-3.5-turbo-0301" | "gpt-4-0314" | "gpt-4-32k",
+  temperature: number = 0.7,
+  top_p: number = 0.9,
+  maxRetries: number = 3
+): Promise<string> {
+  const config = new Configuration({
+    apiKey: OPENAI_TOKEN,
+  });
+  const openai = new OpenAIApi(config);
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const completion = await openai.createChatCompletion({
+        model: model,
+        messages: messages,
+      });
+
+      return (completion.data!.choices[0]!.message?.content || "").trim();
+    } catch (error: any) {
+      if (error.response && (error.response.status === 429 || (error.response.status >= 500 && error.response.status < 600))) {
+        const resetMs = parseInt(error.response.headers['x-ratelimit-reset-requests']) || 1000;
+        const waitTime = resetMs + Math.random() * 1000;
+
+        console.warn(
+          `Rate limit or server error encountered (status: ${error.response.status}). Retrying in ${waitTime} ms...`
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('Max retries reached. Request failed.');
+}src/errors.ts
+==================================
+
+
+export class GolemError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GolemError';
+  }
+}
+
+export function handleGolemError(error: GolemError): void {
+  console.error(`[${error.name}] ${error.message}`);
+}src/golem.ts
+==================================
+
+
+#!/usr/bin/env node
+import yargs from 'yargs';
+import { executeTarget } from './executor';
+import { parseGolemFile } from './parser';
+import fs from 'fs';
+
+yargs
+  .command(
+    'golem [golemFile]',
+    'Run the specified Golem file or the default Golem file if none is provided.',
+    (yargs) => {
+      yargs.positional('golemFile', {
+        describe: 'Path to the Golem file',
+        default: 'Golem.yaml',
+        type: 'string',
+      });
+    },
+    async (argv) => {
+      try {
+        const golemFilePath = argv.golemFile as string;
+
+        // Read the Golem file content
+        const golemFileContent = fs.readFileSync(golemFilePath, 'utf8');
+        const golemFile = parseGolemFile(golemFileContent);
+
+        // Execute the default target with an empty context
+        await executeTarget('default', golemFile, new Map());
+      } catch (error: any) {
+        console.error(`Error: ${error.message}`);
+      }
+    }
+  )
+  .demandCommand(1, 'You must provide a valid command.')
+  .help()
+  .alias('h', 'help')
+  .strict().argv;src/types.ts
+==================================
+
+
+export interface GolemTarget {
+  dependencies: string[];
+  prompt?: string;
+}
+
+export type GolemFile = {
+  default: string[];
+} & {
+  [target: string]: GolemTarget | undefined;
+};
+
+export function isGolemTarget(target: GolemTarget | string[] | undefined): target is GolemTarget {
+  return target !== undefined && (target as GolemTarget).dependencies !== undefined;
+}
+src/index.ts
+==================================
+
+
+import { parseGolemFile } from './parser';
+import { GolemFile } from './types';
+import { resolveDependencies } from './dependencies';
+import { executeTarget } from './executor';
+import { GolemError, handleGolemError } from './errors';
+
+async function main() {
+  try {
+    // Read the Golem file content, e.g., from a file or command line input
+    const golemFileContent = '...';
+
+    const golemFile: GolemFile = parseGolemFile(golemFileContent);
+    const dependencies = resolveDependencies(golemFile);
+
+    for (const target of dependencies) {
+      await executeTarget(target, golemFile);
+    }
+  } catch (error) {
+    if (error instanceof GolemError) {
+      handleGolemError(error);
+    } else {
+      throw error;
+    }
+  }
+}
+
+main();golems/music-genre-year.yaml
+==================================
+
+
+default:
+  dependencies:
+    - best_year_for_genre
+
+find_genre:
+  prompt: >
+    Generate a random musical genre. Please provide a single-word answer representing the genre.
+
+best_year_for_genre:
+  dependencies:
+    - find_genre
+  prompt: >
+    Find the best year for the musical genre "{{find_genre}}". Please provide a 4-digit number representing the year.golems/software-map.yaml
+==================================
+
+
+default:
+  dependencies:
+    - transactions
+    - components
+
+software_overview:
+  dependencies:
+    - !node_modules
+  prompt: >
+    Software design is comprised of components, interfaces and transactions.
+    Talk about how all of these pieces are designed, and fit together.  Use code
+    snippet examples with filenames, line numbers. Draw Mermaid.JS diagrams.
+
+transactions:
+  dependencies:
+    - software_overview
+  prompt: >
+    Generate the names, descriptions and sequence diagrams of the major
+    transactions that flow through this application, based on the software
+    overview: "{{software_overview}}". Use code snippet examples with filenames,
+    line numbers.  Draw Mermaid.JS diagrams.
+
+components:
+  dependencies:
+    - software_overview
+  prompt: >
+    Generate the names, descriptions and diagrams of the major
+    components of this system, based on the software overview:
+    "{{software_overview}}". Use code snippet examples file
+    filenames, line numbers.  Draw Mermaid.JS diagrams.golems/hello-world.yaml
+==================================
+
+
+default:
+  dependencies:
+  prompt: "Say 'Hello, world!' in a random language."
+golems/templates.yaml
+==================================
+
+
+default:
+  dependencies:
+    - transactions
+    - components
+
+software_overview:
+  dependencies:
+    - !node_modules
+  prompt: >
+    Software design is comprised of components, interfaces and transactions.
+    Talk about how all of these pieces are designed, and fit together.  Use code
+    snippet examples with filenames, line numbers. Draw Mermaid.JS diagrams.
+
+transactions:
+  dependencies:
+    - software_overview
+  prompt: >
+    Generate the names, descriptions and sequence diagrams of the major
+    transactions that flow through this application, based on the software
+    overview: "{{software_overview}}". Use code snippet examples with filenames,
+    line numbers.  Draw Mermaid.JS diagrams.
+
+components:
+  dependencies:
+    - software_overview
+  prompt: >
+    Generate the names, descriptions and diagrams of the major
+    components of this system, based on the software overview:
+    "{{software_overview}}". Use code snippet examples file
+    filenames, line numbers.  Draw Mermaid.JS diagrams.
