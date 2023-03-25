@@ -56,15 +56,23 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   const golemTarget = golemFile[target];
 
   let prompt = golemTarget?.prompt ?? "{no prompt}";
-  console.log( golemTarget?.prompt ?? "{no prompt}" );
-  console.log("================================");
+  if (isGolemTarget(golemTarget) && golemTarget.prompt) {
+    prompt = golemTarget.prompt;
+    const placeholderRegex = /{{\s*(\w+)\s*}}/g;
+    let match;
 
-/*  const prompt = isGolemTarget(golemTarget) && golemTarget.prompt
-    ? golemTarget.prompt.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
-        return context.has(key) ? context.get(key) : '';
-      })
-    : '';
-*/
+    while ((match = placeholderRegex.exec(prompt)) !== null) {
+      const key = match[1];
+
+      if (context.has(key)) {
+        prompt = prompt.replace(match[0], context.get(key));
+      } else {
+        prompt = prompt.replace(match[0], "");
+      }
+    }
+  }
+  console.log(golemTarget?.prompt ?? "{no prompt}");
+  console.log("================================");
   console.log(`Prompt for ${target}: ${prompt}`); // Log the prompt for the current target
 
   const messages: ChatGPTMessage[] = [
