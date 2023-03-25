@@ -2,11 +2,18 @@ default:
   dependencies:
     - transactions
     - components
+  prompt: >
+    Software design is comprised of components, interfaces and transactions.
+    Talk about how all of these pieces are designed, and fit together.  Use code
+    snippet examples with filenames, line numbers. Draw Mermaid.JS diagrams.
 
 software_overview:
   dependencies:
-    - !node_modules
+    - src/executor.ts
   prompt: >
+    {{src/executor.ts}}
+  
+ 
     Software design is comprised of components, interfaces and transactions.
     Talk about how all of these pieces are designed, and fit together.  Use code
     snippet examples with filenames, line numbers. Draw Mermaid.JS diagrams.

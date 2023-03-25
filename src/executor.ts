@@ -1,6 +1,8 @@
 import { exec } from 'child_process';
 import { GolemFile, GolemTarget, isGolemTarget } from './types';
 import { ChatGPTMessage, ChatGPT_completion } from './chat_gpt';
+import { readFile } from 'fs/promises';
+import { dirname } from 'path';
 
 interface ExecutionContext {
   [key: string]: any;
@@ -17,10 +19,27 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
 
   if (golemTarget.dependencies) {
     console.log(`Dependencies for ${target}: ${golemTarget.dependencies}`); // Log the dependencies for the current target
+
     for (const dependency of golemTarget.dependencies) {
       if (dependency) {
-        // Execute the dependency and update the context with its result
-        await executeTarget(dependency, golemFile, context);
+        if (golemFile[dependency]) {
+          // Execute the dependency and update the context with its result
+          await executeTarget(dependency, golemFile, context);
+        } else {
+          try {
+            // Try to read the file content
+            const fileContent = await readFile(dependency, 'utf-8');
+
+            // Store the file content in the context
+            context.set(dependency, fileContent);
+          } catch (error: any) { /* FIXME: This is not the correct way to handle exception types */
+            if (error.code === 'ENOENT') {
+              console.error(`Error executing target "${target}": dependency "${dependency}" not found.`);
+            } else {
+              console.error(`Error executing target "${target}": ${error.message}`);
+            }
+          }
+        }
       }
     }
   }
@@ -30,6 +49,7 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
 
   console.log(`Context after ${target} execution:`, context); // Log the context after the current target's execution
 }
+
 
 function executeCommand(command: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -58,7 +78,8 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   let prompt = golemTarget?.prompt ?? "{no prompt}";
   if (isGolemTarget(golemTarget) && golemTarget.prompt) {
     prompt = golemTarget.prompt;
-    const placeholderRegex = /{{\s*(\w+)\s*}}/g;
+//    const placeholderRegex = /{{\s*(\w+)\s*}}/g;
+    const placeholderRegex = /{{\s*([\w\/.-]+)\s*}}/g;
     let match;
 
     while ((match = placeholderRegex.exec(prompt)) !== null) {
@@ -87,6 +108,7 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   ];
 
   try {
+    console.log("a");
     const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo', 0.7, 0.9);
     console.log(`AI Response for ${target}: ${response}`); // Log the AI response for the current target
 
