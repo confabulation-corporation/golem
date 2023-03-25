@@ -1,6 +1,0 @@
-The key ideas here:
-
-  - Extremely minimalistic syntax. Macro/makefile style.
-  - Need to be able to run macros with prompt templating (+ variables!)
-  - Macros which execute lists
-  - Ability to run targets on lists

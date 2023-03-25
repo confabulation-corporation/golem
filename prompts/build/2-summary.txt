@@ -1,8 +1,0 @@
-In summary, the Golem system would work as follows:
-
-1. Create Golem files for each directory relevant to the build process, specifying dependencies and targets.
-2. Use minimalistic syntax for better readability and ease of use.
-3. Incorporate macros with prompt templating and variables for flexibility.
-4. Allow running targets on lists.
-
-This system will allow developers to build and run AI-based projects more efficiently by utilizing the Golem files to streamline the process. By breaking down the project into smaller, manageable parts, developers can better understand and work with the project structure. Additionally, the light-weight syntax and use of macros make it easier to maintain and modify the build process as needed.
