@@ -1,0 +1,3 @@
+default:
+  dependencies:
+  prompt: "Say 'Hello, world!' in a random language."

@@ -1,0 +1,13 @@
+default:
+  dependencies:
+    - best_year_for_genre
+
+find_genre:
+  prompt: >
+    Generate a random musical genre. Please provide a single-word answer representing the genre.
+
+best_year_for_genre:
+  dependencies:
+    - find_genre
+  prompt: >
+    Find the best year for the musical genre "{{find_genre}}". Please provide a 4-digit number representing the year.
