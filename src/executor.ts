@@ -3,6 +3,7 @@ import { GolemFile, GolemTarget, isGolemTarget } from './types';
 import { ChatGPTMessage, ChatGPT_completion } from './chat_gpt';
 import { readFile } from 'fs/promises';
 import { dirname } from 'path';
+import logger from './logger';
 
 interface ExecutionContext {
   [key: string]: any;
@@ -15,10 +16,10 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
     throw new Error(`Target "${target}" not found in Golem file.`);
   }
 
-  console.log(`Executing target: ${target}`); // Log the current target being executed
+  logger.debug(`Executing target: ${target}`); // Log the current target being executed
 
   if (golemTarget.dependencies) {
-    console.log(`Dependencies for ${target}: ${golemTarget.dependencies}`); // Log the dependencies for the current target
+    logger.debug(`Dependencies for ${target}: ${golemTarget.dependencies}`); // Log the dependencies for the current target
 
     for (const dependency of golemTarget.dependencies) {
       if (dependency) {
@@ -34,9 +35,9 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
             context.set(dependency, fileContent);
           } catch (error: any) { /* FIXME: This is not the correct way to handle exception types */
             if (error.code === 'ENOENT') {
-              console.error(`Error executing target "${target}": dependency "${dependency}" not found.`);
+              logger.error(`Error executing target "${target}": dependency "${dependency}" not found.`);
             } else {
-              console.error(`Error executing target "${target}": ${error.message}`);
+              logger.error(`Error executing target "${target}": ${error.message}`);
             }
           }
         }
@@ -47,7 +48,7 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
   // Call the executeAIChat function for the current target
   await executeAIChat(target, golemFile, context);
 
-  console.log(`Context after ${target} execution:`, context); // Log the context after the current target's execution
+  logger.debug(`Context after ${target} execution:`, context); // Log the context after the current target's execution
 }
 
 
@@ -55,11 +56,11 @@ function executeCommand(command: string): Promise<void> {
   return new Promise((resolve, reject) => {
     exec(command, (error, stdout, stderr) => {
       if (error) {
-        console.error(`Error executing command: ${command}`);
-        console.error(stderr);
+        logger.error(`Error executing command: ${command}`);
+        logger.error(stderr);
         reject(error);
       } else {
-        console.log(stdout);
+        logger.debug(stdout);
         resolve();
       }
     });
@@ -67,10 +68,10 @@ function executeCommand(command: string): Promise<void> {
 }
 
 async function executeAIChat(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
-  console.log("================================");
-  console.log( target );
-  console.log( golemFile );
-  console.log( context );
+  logger.debug("================================");
+  logger.debug( target );
+  logger.debug( golemFile );
+  logger.debug( context );
 
 
   const golemTarget = golemFile[target];
@@ -92,9 +93,9 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
       }
     }
   }
-  console.log(golemTarget?.prompt ?? "{no prompt}");
-  console.log("================================");
-  console.log(`Prompt for ${target}: ${prompt}`); // Log the prompt for the current target
+  logger.debug(golemTarget?.prompt ?? "{no prompt}");
+  logger.debug("================================");
+  logger.debug(`Prompt for ${target}: ${prompt}`); // Log the prompt for the current target
 
   const messages: ChatGPTMessage[] = [
     {
@@ -108,19 +109,20 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   ];
 
   try {
-    console.log("a");
+    logger.debug("a");
     const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo', 0.7, 0.9);
-    console.log(`AI Response for ${target}: ${response}`); // Log the AI response for the current target
+    logger.debug(`AI Response for ${target}: ${response}`); // Log the AI response for the current target
+    console.log( response );  /* This is the variable we want to store across the transaction */
 
     if (!response) {
-      console.log(`No AI response for ${target}. Storing default value.`); // Log when there is no AI response for the current target
+      logger.debug(`No AI response for ${target}. Storing default value.`); // Log when there is no AI response for the current target
       context.set(target, `Default value for ${target}`); // Store the default value in the context
     } else {
       context.set(target, response); // Store the AI response in the context
     }
 
-    console.log(`Context after ${target} AI chat:`, context); // Log the context after the AI chat for the current target
+    logger.debug(`Context after ${target} AI chat:`, context); // Log the context after the AI chat for the current target
   } catch (error: any) {
-    console.error(`Error generating AI response: ${error.message}`);
+    logger.error(`Error generating AI response: ${error.message}`);
   }
 }

@@ -1,4 +1,5 @@
 import { Configuration, OpenAIApi } from 'openai';
+import logger from './logger';
 
 export interface ChatGPTMessage {
   role: 'system' | 'user' | 'assistant';
@@ -6,7 +7,6 @@ export interface ChatGPTMessage {
 }
 
 const OPENAI_TOKEN = process.env.OPENAI_TOKEN;
-console.log( `OpenAI token: ${OPENAI_TOKEN}` );
 
 export async function ChatGPT_completion(
   messages: ChatGPTMessage[],
@@ -33,7 +33,7 @@ export async function ChatGPT_completion(
         const resetMs = parseInt(error.response.headers['x-ratelimit-reset-requests']) || 1000;
         const waitTime = resetMs + Math.random() * 1000;
 
-        console.warn(
+        logger.warn(
           `Rate limit or server error encountered (status: ${error.response.status}). Retrying in ${waitTime} ms...`
         );
 

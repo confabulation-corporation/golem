@@ -3,6 +3,7 @@ import yargs from 'yargs';
 import { executeTarget } from './executor';
 import { parseGolemFile } from './parser';
 import fs from 'fs';
+import logger from './logger';
 
 yargs
   .command(
@@ -26,7 +27,7 @@ yargs
         // Execute the default target with an empty context
         await executeTarget('default', golemFile, new Map());
       } catch (error: any) {
-        console.error(`Error: ${error.message}`);
+        logger.error(`Error: ${error.message}`);
       }
     }
   )
