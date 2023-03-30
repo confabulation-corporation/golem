@@ -1,8 +1,8 @@
- export interface GolemTarget {
-   dependencies: string[];
-   prompt: string;
+export interface GolemTarget {
+  dependencies: string[];
+  prompt: string;
+  model?: string; // Add this line
 }
-
 export type GolemFile = {
   default: string[];
 } & {

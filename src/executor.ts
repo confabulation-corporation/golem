@@ -69,17 +69,18 @@ function executeCommand(command: string): Promise<void> {
 
 async function executeAIChat(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
   logger.debug("================================");
-  logger.debug( target );
-  logger.debug( golemFile );
-  logger.debug( context );
-
+  logger.debug(target);
+  logger.debug(golemFile);
+  logger.debug(context);
 
   const golemTarget = golemFile[target];
-
+  if (!golemTarget) {
+    throw new Error(`Target "${target}" not found in Golem file.`);
+  }
+  
   let prompt = golemTarget?.prompt ?? "{no prompt}";
   if (isGolemTarget(golemTarget) && golemTarget.prompt) {
     prompt = golemTarget.prompt;
-//    const placeholderRegex = /{{\s*(\w+)\s*}}/g;
     const placeholderRegex = /{{\s*([\w\/.-]+)\s*}}/g;
     let match;
 
@@ -97,32 +98,45 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   logger.debug("================================");
   logger.debug(`Prompt for ${target}: ${prompt}`); // Log the prompt for the current target
 
-  const messages: ChatGPTMessage[] = [
-    {
-      role: 'system',
-      content: `You are a helpful assistant!`,
-    },
-    {
-      role: 'user',
-      content: prompt,
-    },
-  ];
+  const model = golemTarget?.model ?? 'gpt-3.5-turbo'; // Use the specified model or default to gpt-3.5-turbo
 
-  try {
-    logger.debug("a");
-    const response = await ChatGPT_completion(messages, 'gpt-3.5-turbo', 0.7, 0.9);
-    logger.debug(`AI Response for ${target}: ${response}`); // Log the AI response for the current target
-    console.log( response );  /* This is the variable we want to store across the transaction */
+  if (model === 'cat') {
+    const concatenatedOutput = golemTarget.dependencies.map(dep => context.get(dep)).join('');
+    context.set(target, concatenatedOutput);
+  }  
+  /* '"gpt-3.5-turbo" | "gpt-3.5-turbo-0301" | "gpt-4-0314" | "gpt-4-32k" */
+  else if ( model == "gpt-3.5-turbo" || model == "gpt-3.5-turbo-0301" || model == "gpt-4-0314" || model == "gpt-4-32k" ) {
+    // Call the executeAIChat function for the current target
+    const messages: ChatGPTMessage[] = [
+      {
+        role: 'system',
+        content: `You are a helpful assistant!`,
+      },
+      {
+        role: 'user',
+        content: prompt,
+      },
+    ];
 
-    if (!response) {
-      logger.debug(`No AI response for ${target}. Storing default value.`); // Log when there is no AI response for the current target
-      context.set(target, `Default value for ${target}`); // Store the default value in the context
-    } else {
-      context.set(target, response); // Store the AI response in the context
+    try {
+      const response = await ChatGPT_completion(messages, model, 0.7, 0.9);
+      logger.debug(`AI Response for ${target}: ${response}`); // Log the AI response for the current target
+      console.log(response);
+
+      if (!response) {
+        logger.debug(`No AI response for ${target}. Storing default value.`); // Log when there is no AI response for the current target
+        context.set(target, `Default value for ${target}`); // Store the default value in the context
+      } else {
+        context.set(target, response); // Store the AI response in the context
+      }
+
+      logger.debug(`Context after ${target} AI chat:`, context); // Log the context after the AI chat for the current target
+    } catch (error: any) {
+      logger.error(`Error generating AI response: ${error.message}`);
     }
-
-    logger.debug(`Context after ${target} AI chat:`, context); // Log the context after the AI chat for the current target
-  } catch (error: any) {
-    logger.error(`Error generating AI response: ${error.message}`);
+  }
+  else
+  {
+    throw new Error(`No such supported model ${model}` );
   }
 }
