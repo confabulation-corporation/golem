@@ -1,0 +1,3 @@
+default:
+  dependencies: [golems/test.txt]
+  prompt: "{{golems/test.txt}} What's this story about?"
