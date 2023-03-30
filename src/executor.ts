@@ -77,6 +77,12 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   if (!golemTarget) {
     throw new Error(`Target "${target}" not found in Golem file.`);
   }
+
+  if ( !golemTarget?.prompt && !golemTarget?.model )
+  {
+    /* Default to cat */
+    golemTarget.model = 'cat';
+  }
   
   let prompt = golemTarget?.prompt ?? "{no prompt}";
   if (isGolemTarget(golemTarget) && golemTarget.prompt) {
