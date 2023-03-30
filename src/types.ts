@@ -1,6 +1,6 @@
  export interface GolemTarget {
    dependencies: string[];
-   prompt: string[];
+   prompt: string;
 }
 
 export type GolemFile = {
