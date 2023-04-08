@@ -2,6 +2,7 @@ export interface GolemTarget {
   dependencies: string[];
   prompt: string;
   model?: string; // Add this line
+  task_generation_prompt?: string; // Add this line
 }
 export type GolemFile = {
   default: string[];

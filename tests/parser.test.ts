@@ -3,7 +3,7 @@ import fs from 'fs';
 
 describe('Golem file parsing tests', () => {
   test('Valid Golem file', () => {
-    const golemFileContent = fs.readFileSync('valid_golem_file.yaml', 'utf-8');
+    const golemFileContent = fs.readFileSync('golems/valid_golem_file.yaml', 'utf-8');
     const golemFile = parseGolemFile(golemFileContent);
 
     expect(golemFile.default).toBeDefined();
@@ -11,7 +11,7 @@ describe('Golem file parsing tests', () => {
   });
 
   test('Golem file with multiple targets', () => {
-    const golemFileContent = fs.readFileSync('multiple_targets_golem_file.yaml', 'utf-8');
+    const golemFileContent = fs.readFileSync('golems/multiple_targets_golem_file.yaml', 'utf-8');
     const golemFile = parseGolemFile(golemFileContent);
 
     expect(golemFile.default).toBeDefined();
@@ -21,14 +21,14 @@ describe('Golem file parsing tests', () => {
   });
 
   test('Invalid Golem file (missing default target)', () => {
-    const golemFileContent = fs.readFileSync('missing_default_target_golem_file.yaml', 'utf-8');
+    const golemFileContent = fs.readFileSync('golems/missing_default_target_golem_file.yaml', 'utf-8');
     const golemFile = parseGolemFile(golemFileContent);
 
     expect(golemFile.default).toBeUndefined();
   });
 
   test('Invalid Golem file (missing dependency)', () => {
-    const golemFileContent = fs.readFileSync('missing_dependency_golem_file.yaml', 'utf-8');
+    const golemFileContent = fs.readFileSync('golems/missing_dependency_golem_file.yaml', 'utf-8');
     const golemFile = parseGolemFile(golemFileContent);
 
     expect(golemFile.default).toBeDefined();
@@ -38,7 +38,7 @@ describe('Golem file parsing tests', () => {
   });
 
   test('Golem file with model configuration', () => {
-    const golemFileContent = fs.readFileSync('model_configuration_golem_file.yaml', 'utf-8');
+    const golemFileContent = fs.readFileSync('golems/model_configuration_golem_file.yaml', 'utf-8');
     const golemFile = parseGolemFile(golemFileContent);
 
     expect(golemFile.default).toBeDefined();
