@@ -1,0 +1,4 @@
+default:
+  dependencies: multi-level/test.yaml
+  prompt: "{{{multi-level/test.yaml}}} Explain why this is funny."
+  

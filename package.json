@@ -19,6 +19,7 @@
   "dependencies": {
     "@types/js-yaml": "^4.0.5",
     "@types/yargs": "^17.0.23",
+    "glob": "^9.3.2",
     "js-yaml": "^4.1.0",
     "openai": "^3.2.1",
     "pino": "^8.11.0",

@@ -1,0 +1,7 @@
+default:
+  dependencies: source
+  prompt: "{{source}} <--- ^^^^^ Is this source-code ready to publish open-source?"
+  model: gpt-3.5-turbo
+
+source:
+  dependencies: "src/*ts"
