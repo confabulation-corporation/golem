@@ -15,24 +15,6 @@ interface ExecutionContext {
   [key: string]: any;
 }
 
-async function executeAIChatWithCache(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
-  const golemTarget = golemFile[target];
-  if (!golemTarget || !isGolemTarget(golemTarget)) {
-    return;
-  }
-
-  const cacheKey = generateCacheKey(target, golemTarget.dependencies || [], golemTarget.prompt || '');
-
-  if (isCacheValid(target, cacheKey)) {
-    const cachedOutput = loadOutputFromCache(target, cacheKey);
-    context.set(target, cachedOutput);
-  } else {
-    await executeAIChat(target, golemFile, context); // Update this line to call the executeAIChat function
-    const response = context.get(target);
-    saveOutputToCache(target, cacheKey, response);
-  }
-}
-
 export async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
   const golemTarget = golemFile[target];
 
@@ -40,22 +22,20 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
     throw new Error(`Target "${target}" not found in Golem file.`);
   }
 
-  console.log(`Executing target: ${target}`); // Log the current target being executed
+  console.log(`Executing target: ${target}`);
 
   if (golemTarget.dependencies) {
-    console.log(`Dependencies for ${target}: ${golemTarget.dependencies}`); // Log the dependencies for the current target
+    console.log(`Dependencies for ${target}: ${golemTarget.dependencies}`);
     for (const dependency of golemTarget.dependencies) {
       if (dependency) {
-        // Execute the dependency and update the context with its result
         await executeTarget(dependency, golemFile, context);
       }
     }
   }
 
-  // Call the executeAIChatWithCache function for the current target
   await executeAIChatWithCache(target, golemFile, context);
 
-  console.log(`Context after ${target} execution:`, context); // Log the context after the current target's execution
+  console.log(`Context after ${target} execution:`, context);
 }
 
 function executeCommand(command: string): Promise<void> {
@@ -73,12 +53,27 @@ function executeCommand(command: string): Promise<void> {
   });
 }
 
-async function executeAIChat(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
-  logger.debug("================================");
-  logger.debug(target);
-  logger.debug(golemFile);
-  logger.debug(context);
+async function executeAIChatWithCache(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
+  const golemTarget = golemFile[target];
+  if (!golemTarget || !isGolemTarget(golemTarget)) {
+    return;
+  }
 
+  const cacheKey = generateCacheKey(target, golemTarget.dependencies || [], golemTarget.prompt || '');
+
+  if (isCacheValid(target, cacheKey)) {
+    const cachedOutput = loadOutputFromCache(target, cacheKey);
+    context.set(target, cachedOutput);
+  } else {
+    await executeAIChat(target, golemFile, context);
+    const response = context.get(target);
+    saveOutputToCache(target, cacheKey, response);
+  }
+}
+
+async function executeAIChat(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
+  console.log('Executing AI chat for target:', target);
+  
   const golemTarget = golemFile[target];
   if (!golemTarget) {
     throw new Error(`Target "${target}" not found in Golem file.`);
@@ -88,13 +83,11 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
     return;
   }
 
-  if ( !golemTarget?.prompt && !golemTarget?.model )
-  {
-    /* Default to cat */
+  if (!golemTarget.prompt && !golemTarget.model) {
     golemTarget.model = 'cat';
   }
-  
-  let prompt = golemTarget?.prompt ?? "{no prompt}";
+
+  let prompt = golemTarget.prompt ?? "{no prompt}";
   if (isGolemTarget(golemTarget) && golemTarget.prompt) {
     prompt = golemTarget.prompt;
     const placeholderRegex = /{{\s*([\w\/.-]+)\s*}}/g;
@@ -110,19 +103,13 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
       }
     }
   }
-  logger.debug(golemTarget?.prompt ?? "{no prompt}");
-  logger.debug("================================");
-  logger.debug(`Prompt for ${target}: ${prompt}`); // Log the prompt for the current target
 
-  const model = golemTarget?.model ?? 'gpt-3.5-turbo'; // Use the specified model or default to gpt-3.5-turbo
+  const model = golemTarget.model ?? 'gpt-3.5-turbo';
 
   if (model === 'cat') {
     const concatenatedOutput = golemTarget.dependencies.map(dep => context.get(dep)).join('');
     context.set(target, concatenatedOutput);
-  }  
-  /* '"gpt-3.5-turbo" | "gpt-3.5-turbo-0301" | "gpt-4-0314" | "gpt-4-32k" */
-  else if ( model == "gpt-3.5-turbo" || model == "gpt-3.5-turbo-0301" || model == "gpt-4-0314" || model == "gpt-4-32k" ) {
-    // Call the executeAIChat function for the current target
+  } else if (model == "gpt-3.5-turbo" || model == "gpt-3.5-turbo-0301" || model == "gpt-4-0314" || model == "gpt-4-32k") {
     const messages: ChatGPTMessage[] = [
       {
         role: 'system',
@@ -134,25 +121,29 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
       },
     ];
 
-    try {
-      const response = await ChatGPT_completion(messages, model, 0.7, 0.9);
-      logger.debug(`AI Response for ${target}: ${response}`); // Log the AI response for the current target
-      console.log(response);
+try {
+  const response = await ChatGPT_completion(messages, model, 0.7, 0.9);
+  console.log('AI response for target:', target, 'Response:', response);
 
-      if (!response) {
-        logger.debug(`No AI response for ${target}. Storing default value.`); // Log when there is no AI response for the current target
-        context.set(target, `Default value for ${target}`); // Store the default value in the context
-      } else {
-        context.set(target, response); // Store the AI response in the context
-      }
-
-      logger.debug(`Context after ${target} AI chat:`, context); // Log the context after the AI chat for the current target
-    } catch (error: any) {
-      logger.error(`Error generating AI response: ${error.message}`);
-    }
+  if (!response) {
+    context.set(target, `Default value for ${target}`);
+  } else {
+    context.set(target, response);
   }
-  else
-  {
-    throw new Error(`No such supported model ${model}` );
+
+  if (golemTarget.task_generation_prompt) {
+    console.log('Task generation prompt:', golemTarget.task_generation_prompt);
+    // (handle task_generation_prompt and generate new targets)
+    // Add the logic to process the task_generation_prompt and create new targets.
+    // After processing and generating new targets, log them using the following line:
+    // console.log('New targets:', newTargets);
+  }
+
+} catch (error: any) {
+  logger.error(`Error generating AI response: ${error.message}`);
+}
+
+  } else {
+    throw new Error(`No such supported model ${model}`);
   }
 }
