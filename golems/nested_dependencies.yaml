@@ -1,0 +1,22 @@
+default:
+  dependencies:
+    - level_1
+
+level_1:
+  dependencies: [level_2]
+  prompt: "Level 1 result: {{level_2}}"
+  model: cat
+
+level_2:
+  dependencies: [level_3]
+  prompt: "Level 2 result: {{level_3}}"
+  model: cat
+
+level_3:
+  dependencies: [level_4]
+  prompt: "Level 3 result: {{level_4}}"
+  model: cat
+
+level_4:
+  prompt: "This is the final level."
+  model: cat

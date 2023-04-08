@@ -1,0 +1,2 @@
+say_hello:
+  prompt: "Generate a 'Hello, world!' message."
