@@ -4,6 +4,7 @@ import { executeTarget } from './executor';
 import { parseGolemFile } from './parser';
 import fs from 'fs';
 import logger from './logger';
+import { createGolemCacheDir } from './utils'; // Add this import
 
 yargs
   .command(
@@ -19,6 +20,9 @@ yargs
     async (argv) => {
       try {
         const golemFilePath = argv.golemFile as string;
+
+        // Add this line to create the .golem/ directory
+        createGolemCacheDir();
 
         // Read the Golem file content
         const golemFileContent = fs.readFileSync(golemFilePath, 'utf8');

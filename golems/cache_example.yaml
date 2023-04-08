@@ -1,0 +1,7 @@
+default:
+  dependencies:
+    - generate_message
+  prompt: "The generated message is: '{{generate_message}}'."
+
+generate_message:
+  prompt: "Create a unique message that includes the word 'cache'."

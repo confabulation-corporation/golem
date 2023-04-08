@@ -4,9 +4,33 @@ import { ChatGPTMessage, ChatGPT_completion } from './chat_gpt';
 import { readFile } from 'fs/promises';
 import { dirname } from 'path';
 import logger from './logger';
+import {
+  generateCacheKey,
+  isCacheValid,
+  saveOutputToCache,
+  loadOutputFromCache,
+} from './utils';
 
 interface ExecutionContext {
   [key: string]: any;
+}
+
+async function executeAIChatWithCache(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
+  const golemTarget = golemFile[target];
+  if (!golemTarget || !isGolemTarget(golemTarget)) {
+    return;
+  }
+
+  const cacheKey = generateCacheKey(target, golemTarget.dependencies || [], golemTarget.prompt || '');
+
+  if (isCacheValid(target, cacheKey)) {
+    const cachedOutput = loadOutputFromCache(target, cacheKey);
+    context.set(target, cachedOutput);
+  } else {
+    await executeAIChat(target, golemFile, context);
+    const response = context.get(target);
+    saveOutputToCache(target, cacheKey, response);
+  }
 }
 
 export async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
@@ -45,12 +69,11 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
     }
   }
 
-  // Call the executeAIChat function for the current target
-  await executeAIChat(target, golemFile, context);
+  // Call the executeAIChatWithCache function for the current target
+  await executeAIChatWithCache(target, golemFile, context);
 
   logger.debug(`Context after ${target} execution:`, context); // Log the context after the current target's execution
 }
-
 
 function executeCommand(command: string): Promise<void> {
   return new Promise((resolve, reject) => {
