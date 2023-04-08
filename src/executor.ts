@@ -33,7 +33,7 @@ async function executeAIChatWithCache(target: string, golemFile: GolemFile, cont
   }
 }
 
-async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
+export async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
   const golemTarget = golemFile[target];
 
   if (!golemTarget) {
