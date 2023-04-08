@@ -1,0 +1,7 @@
+default:
+  dependencies:
+    - say_hello
+  prompt: "What is the message? '{{say_hello}}'."
+
+say_hello:
+  prompt: "Generate a 'Hello, world!' message."

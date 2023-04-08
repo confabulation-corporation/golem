@@ -1,18 +1,48 @@
 import { parseGolemFile } from '../src/parser';
+import fs from 'fs';
 
-describe('Parser', () => {
-  it('should parse a valid Golem file', () => {
-    const golemFileContent = `
-    default:
-      dependencies:
-        - example_target
+describe('Golem file parsing tests', () => {
+  test('Valid Golem file', () => {
+    const golemFileContent = fs.readFileSync('valid_golem_file.yaml', 'utf-8');
+    const golemFile = parseGolemFile(golemFileContent);
 
-    example_target:
-      prompt: "Answer this example question."
-    `;
-    const parsedGolemFile = parseGolemFile(golemFileContent);
-    expect(parsedGolemFile).toBeInstanceOf(Object); // Adjust the expectation based on your test case
+    expect(golemFile.default).toBeDefined();
+    expect(golemFile.say_hello?.prompt).toBe("Generate a 'Hello, world!' message.");
   });
 
-  // Add more test cases here
+  test('Golem file with multiple targets', () => {
+    const golemFileContent = fs.readFileSync('multiple_targets_golem_file.yaml', 'utf-8');
+    const golemFile = parseGolemFile(golemFileContent);
+
+    expect(golemFile.default).toBeDefined();
+    expect(golemFile.greet_person?.prompt).toBe("{{get_greeting}} {{get_name}}.");
+    expect(golemFile.get_name?.prompt).toBe("Provide a person's name.");
+    expect(golemFile.get_greeting?.prompt).toBe("Generate a greeting word.");
+  });
+
+  test('Invalid Golem file (missing default target)', () => {
+    const golemFileContent = fs.readFileSync('missing_default_target_golem_file.yaml', 'utf-8');
+    const golemFile = parseGolemFile(golemFileContent);
+
+    expect(golemFile.default).toBeUndefined();
+  });
+
+  test('Invalid Golem file (missing dependency)', () => {
+    const golemFileContent = fs.readFileSync('missing_dependency_golem_file.yaml', 'utf-8');
+    const golemFile = parseGolemFile(golemFileContent);
+
+    expect(golemFile.default).toBeDefined();
+    expect(golemFile.greet_person?.prompt).toBe("{{get_greeting}} {{get_name}}.");
+    expect(golemFile.get_name?.prompt).toBe("Provide a person's name.");
+    expect(golemFile.get_greeting).toBeUndefined();
+  });
+
+  test('Golem file with model configuration', () => {
+    const golemFileContent = fs.readFileSync('model_configuration_golem_file.yaml', 'utf-8');
+    const golemFile = parseGolemFile(golemFileContent);
+
+    expect(golemFile.default).toBeDefined();
+    expect(golemFile.generate_message?.model).toBe('gpt-3.5-turbo');
+    expect(golemFile.generate_message?.prompt).toBe("Create a unique message that includes the word 'cache'.");
+  });
 });

@@ -1,0 +1,13 @@
+default:
+  dependencies:
+    - greet_person
+
+greet_person:
+  dependencies: [get_name, get_greeting]
+  prompt: "{{get_greeting}} {{get_name}}."
+
+get_name:
+  prompt: "Provide a person's name."
+
+get_greeting:
+  prompt: "Generate a greeting word."
