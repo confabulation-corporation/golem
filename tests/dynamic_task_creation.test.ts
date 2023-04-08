@@ -20,14 +20,37 @@ describe('Dynamic Task Creation', () => {
     golemFile = parseGolemFile(golemFileContent);
   });
 
-  // ... (rest of the tests)
+  test('successful dynamic task creation', async () => {
+    const initialContext = new Map();
+    await executeTarget('initial_task', golemFile, initialContext);
+    const newTargets = Object.keys(golemFile).filter(target => target !== 'default' && target !== 'initial_task');
+    expect(newTargets.length).toBeGreaterThan(0);
+  });
+
+  test('dynamic task creation with AI chat failure', async () => {
+    const initialContext = new Map();
+
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'INVALID_KEY';
+
+    try {
+      await executeTarget('initial_task', golemFile, initialContext);
+    } catch (error: any) {
+      expect(error.message).toContain('Error generating AI response');
+    } finally {
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
 
   test('dynamic task creation with duplicate or invalid target names', async () => {
     if (golemFile['initial_task']) {
       golemFile['initial_task'].task_generation_prompt = 'Generate a new target with the same name as the initial_task.';
     }
 
-    // ...
+    const initialContext = new Map();
+    await executeTarget('initial_task', golemFile, initialContext);
+    const newTargets = Object.keys(golemFile).filter(target => target !== 'default' && target !== 'initial_task');
+    expect(newTargets.length).toBe(0);
   });
 
   test('dynamic task creation with no new tasks generated', async () => {
@@ -35,6 +58,9 @@ describe('Dynamic Task Creation', () => {
       golemFile['initial_task'].task_generation_prompt = 'Do not generate any new targets.';
     }
 
-    // ...
+    const initialContext = new Map();
+    await executeTarget('initial_task', golemFile, initialContext);
+    const newTargets = Object.keys(golemFile).filter(target => target !== 'default' && target !== 'initial_task');
+    expect(newTargets.length).toBe(0);
   });
 });
