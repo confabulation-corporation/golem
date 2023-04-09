@@ -1,6 +1,6 @@
 # Golem AI Build System with Dynamic Task Creation
 
-Golem is an AI-powered build system that leverages OpenAI to automate various tasks in the development process, such as code generation, refactoring, optimization, and code reviews. This version of Golem introduces dynamic task creation inspired by the BabyAGI task management system, allowing the system to adapt and generate new targets based on the outcomes of previous targets and the overall goal of the project.
+Golem is an AI-powered build system that leverages OpenAI to automate various tasks in the development process, such as code generation, refactoring, optimization, and code reviews. This version of Golem introduces dynamic task creation, allowing the system to adapt and generate new targets based on the outcomes of previous targets and the overall goal of the project.
 
 ## Features
 
