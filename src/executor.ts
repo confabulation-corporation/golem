@@ -73,7 +73,7 @@ async function executeAIChatWithCache(target: string, golemFile: GolemFile, cont
 
 async function executeAIChat(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
   console.log('Executing AI chat for target:', target);
-  
+
   const golemTarget = golemFile[target];
   if (!golemTarget) {
     throw new Error(`Target "${target}" not found in Golem file.`);
@@ -121,28 +121,43 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
       },
     ];
 
-try {
-  const response = await ChatGPT_completion(messages, model, 0.7, 0.9);
-  console.log('AI response for target:', target, 'Response:', response);
+    try {
+      const response = await ChatGPT_completion(messages, model, 0.7, 0.9);
+      console.log('AI response for target:', target, 'Response:', response);
 
-  if (!response) {
-    context.set(target, `Default value for ${target}`);
-  } else {
-    context.set(target, response);
-  }
+      if (!response) {
+        context.set(target, `Default value for ${target}`);
+      } else {
+        context.set(target, response);
+      }
 
-  if (golemTarget.task_generation_prompt) {
-    console.log('Task generation prompt:', golemTarget.task_generation_prompt);
-    // (handle task_generation_prompt and generate new targets)
-    // Add the logic to process the task_generation_prompt and create new targets.
-    // After processing and generating new targets, log them using the following line:
-    // console.log('New targets:', newTargets);
-  }
+      // Handling task_generation_prompt
+      if (golemTarget.task_generation_prompt) {
+        console.log('Task generation prompt:', golemTarget.task_generation_prompt);
+        // Generate a new AI chat prompt using the task_generation_prompt and the current context
+        const taskGenerationMessages: ChatGPTMessage[] = [
+          {
+            role: 'system',
+            content: `You are a helpful assistant!`,
+          },
+          {
+            role: 'user',
+            content: golemTarget.task_generation_prompt,
+          },
+        ];
 
-} catch (error: any) {
-  logger.error(`Error generating AI response: ${error.message}`);
-}
+        const taskGenerationResponse = await ChatGPT_completion(taskGenerationMessages, model, 0.7, 0.9);
+        console.log('AI response for task_generation_prompt:', taskGenerationResponse);
 
+        // Process the AI's response to extract new target information and add the new targets to the golemFile object
+        // Implement the logic to process the taskGenerationResponse and create new targets
+        // After processing and generating new targets, log them using the following line:
+        // console.log('New targets:', newTargets);
+      }
+
+    } catch (error: any) {
+      logger.error(`Error generating AI response: ${error.message}`);
+    }
   } else {
     throw new Error(`No such supported model ${model}`);
   }
