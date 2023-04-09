@@ -27,44 +27,27 @@ async function executeAIChatWithCache(target: string, golemFile: GolemFile, cont
     const cachedOutput = loadOutputFromCache(target, cacheKey);
     context.set(target, cachedOutput);
   } else {
-    await executeAIChat(target, golemFile, context);
+    await executeAIChat(target, golemFile, context); // Update this line to call the executeAIChat function
     const response = context.get(target);
     saveOutputToCache(target, cacheKey, response);
   }
 }
 
-export async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
+async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
   const golemTarget = golemFile[target];
 
   if (!golemTarget) {
     throw new Error(`Target "${target}" not found in Golem file.`);
   }
 
-  logger.debug(`Executing target: ${target}`); // Log the current target being executed
+  console.log(`Executing target: ${target}`); // Log the current target being executed
 
   if (golemTarget.dependencies) {
-    logger.debug(`Dependencies for ${target}: ${golemTarget.dependencies}`); // Log the dependencies for the current target
-
+    console.log(`Dependencies for ${target}: ${golemTarget.dependencies}`); // Log the dependencies for the current target
     for (const dependency of golemTarget.dependencies) {
       if (dependency) {
-        if (golemFile[dependency]) {
-          // Execute the dependency and update the context with its result
-          await executeTarget(dependency, golemFile, context);
-        } else {
-          try {
-            // Try to read the file content
-            const fileContent = await readFile(dependency, 'utf-8');
-
-            // Store the file content in the context
-            context.set(dependency, fileContent);
-          } catch (error: any) { /* FIXME: This is not the correct way to handle exception types */
-            if (error.code === 'ENOENT') {
-              logger.error(`Error executing target "${target}": dependency "${dependency}" not found.`);
-            } else {
-              logger.error(`Error executing target "${target}": ${error.message}`);
-            }
-          }
-        }
+        // Execute the dependency and update the context with its result
+        await executeTarget(dependency, golemFile, context);
       }
     }
   }
@@ -72,7 +55,7 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
   // Call the executeAIChatWithCache function for the current target
   await executeAIChatWithCache(target, golemFile, context);
 
-  logger.debug(`Context after ${target} execution:`, context); // Log the context after the current target's execution
+  console.log(`Context after ${target} execution:`, context); // Log the context after the current target's execution
 }
 
 function executeCommand(command: string): Promise<void> {
