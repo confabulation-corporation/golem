@@ -1,5 +1,5 @@
 import { GolemFile } from './types';
-import { GolemFileError } from './errors';
+// import { GolemFileError } from './errors';
 
 export function validateGolemFile(golemFile: GolemFile): void {
   // Validate the Golem file structure and content

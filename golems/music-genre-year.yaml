@@ -3,6 +3,7 @@ default:
     - best_year_for_genre
 
 find_genre:
+  dependencies: []
   prompt: >
     Generate a random musical genre. Please provide a single-word answer representing the genre.
 

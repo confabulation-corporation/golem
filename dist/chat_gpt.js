@@ -7,12 +7,14 @@ exports.ChatGPT_completion = void 0;
 const openai_1 = require("openai");
 const logger_1 = __importDefault(require("./logger"));
 const OPENAI_TOKEN = process.env.OPENAI_TOKEN;
+console.log("dcd", OPENAI_TOKEN);
 async function ChatGPT_completion(messages, model, temperature = 0.7, top_p = 0.9, maxRetries = 3) {
     var _a;
     const config = new openai_1.Configuration({
         apiKey: OPENAI_TOKEN,
     });
     const openai = new openai_1.OpenAIApi(config);
+    console.log(openai);
     for (let i = 0; i < maxRetries; i++) {
         try {
             const completion = await openai.createChatCompletion({

@@ -2,10 +2,13 @@ import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
-export function generateCacheKey(target: string, dependencies: string[], prompt: string): string {
-  const inputString = `${target}_${dependencies.join('_')}_${prompt}`;
+export function generateCacheKey(target: string, dependencies: string[], furtherInstructionsArr: string[]): string {
+
+  const stringToHash = JSON.stringify(furtherInstructionsArr);
+  const inputString = `${target}:${dependencies.join(',')}_${stringToHash}`;
   const hash = createHash('sha1').update(inputString).digest('hex');
   return hash;
+  
 }
 
 export function getCachedOutputPath(target: string, cacheKey: string): string {
@@ -17,9 +20,9 @@ export function isCacheValid(target: string, cacheKey: string): boolean {
   return existsSync(cachedOutputPath);
 }
 
-export function saveOutputToCache(target: string, cacheKey: string, output: string): void {
+export function saveOutputToCache(target: string, cacheKey: string, context: Map<string, any>): void {
   const cachedOutputPath = getCachedOutputPath(target, cacheKey);
-  writeFileSync(cachedOutputPath, output, 'utf-8');
+  writeFileSync(cachedOutputPath, JSON.stringify(Object.fromEntries(context), null, 2), 'utf-8');
 }
 
 export function loadOutputFromCache(target: string, cacheKey: string): string {

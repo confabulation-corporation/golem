@@ -16,6 +16,7 @@ interface ExecutionContext {
 }
 
 export async function executeTarget(target: string, golemFile: GolemFile, context: Map<string, any> = new Map()): Promise<void> {
+    
   const golemTarget = golemFile[target];
 
   if (!golemTarget) {
@@ -25,7 +26,9 @@ export async function executeTarget(target: string, golemFile: GolemFile, contex
   console.log(`Executing target: ${target}`);
 
   if (golemTarget.dependencies) {
+
     console.log(`Dependencies for ${target}: ${golemTarget.dependencies}`);
+
     for (const dependency of golemTarget.dependencies) {
       if (dependency) {
         await executeTarget(dependency, golemFile, context);
@@ -54,25 +57,35 @@ function executeCommand(command: string): Promise<void> {
 }
 
 async function executeAIChatWithCache(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
+  
+  const golemFileToArray: any = [];
+  for (const key in golemFile){
+    const val = golemFile[key as keyof typeof golemFile];
+    golemFileToArray.push(val);
+  }
+  
   const golemTarget = golemFile[target];
+ 
   if (!golemTarget || !isGolemTarget(golemTarget)) {
     return;
   }
 
-  const cacheKey = generateCacheKey(target, golemTarget.dependencies || [], golemTarget.prompt || '');
+  const cacheKey = generateCacheKey(target, golemTarget.dependencies || [], [...golemFileToArray] || '');
 
   if (isCacheValid(target, cacheKey)) {
+    console.log("Returning Cached output");
     const cachedOutput = loadOutputFromCache(target, cacheKey);
     context.set(target, cachedOutput);
   } else {
     await executeAIChat(target, golemFile, context);
-    const response = context.get(target);
-    saveOutputToCache(target, cacheKey, response);
+    saveOutputToCache(target, cacheKey, context);
   }
 }
 
 async function executeAIChat(target: string, golemFile: GolemFile, context: Map<string, any>): Promise<void> {
-  console.log('Executing AI chat for target:', target);
+
+  // TODO: change variable name to better reflect its functionality
+  const newContext: string[] = [];
 
   const golemTarget = golemFile[target];
   if (!golemTarget) {
@@ -88,6 +101,7 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   }
 
   let prompt = golemTarget.prompt ?? "{no prompt}";
+
   if (isGolemTarget(golemTarget) && golemTarget.prompt) {
     prompt = golemTarget.prompt;
     const placeholderRegex = /{{\s*([\w\/.-]+)\s*}}/g;
@@ -107,58 +121,96 @@ async function executeAIChat(target: string, golemFile: GolemFile, context: Map<
   const model = golemTarget.model ?? 'gpt-3.5-turbo';
 
   if (model === 'cat') {
+    
     const concatenatedOutput = golemTarget.dependencies.map(dep => context.get(dep)).join('');
+  
     context.set(target, concatenatedOutput);
+  
   } else if (model == "gpt-3.5-turbo" || model == "gpt-3.5-turbo-0301" || model == "gpt-4-0314" || model == "gpt-4-32k") {
-    const messages: ChatGPTMessage[] = [
-      {
-        role: 'system',
-        content: `You are a helpful assistant!`,
-      },
-      {
-        role: 'user',
-        content: prompt,
-      },
-    ];
+    
+      const messages: ChatGPTMessage[] = [
+        {
+          role: 'system',
+          content: `You are a helpful assistant!`,
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ];
 
-    try {
-      const response = await ChatGPT_completion(messages, model, 0.7, 0.9);
-      console.log('AI response for target:', target, 'Response:', response);
+      // This gets the 'keys' (subtasks) of a target (task). For example,
+      // imp_task:
+      //   dependencies: []
+      //   prompt: "Pick 2 numbers from 3, 5 and 5."
+      // Here, imp_task is a target (task) and prompt is a key (subtask)
+      const golemTargetKeys: string[] = Object.keys(golemTarget);
 
-      if (!response) {
-        context.set(target, `Default value for ${target}`);
-      } else {
-        context.set(target, response);
+      if (golemTargetKeys.length === 2){
+        const response = await ChatGPT_completion(messages, model, 0.7, 0.9);
+
+        if (!response) {
+          context.set(target, `Default value for ${target}`);
+        } else {
+          context.set(target, response);
+        }
       }
 
-      // Handling task_generation_prompt
-      if (golemTarget.task_generation_prompt) {
-        console.log('Task generation prompt:', golemTarget.task_generation_prompt);
-        // Generate a new AI chat prompt using the task_generation_prompt and the current context
-        const taskGenerationMessages: ChatGPTMessage[] = [
-          {
-            role: 'system',
-            content: `You are a helpful assistant!`,
-          },
-          {
-            role: 'user',
-            content: golemTarget.task_generation_prompt,
-          },
-        ];
+      else if (golemTargetKeys.length > 2){
+        try {
+    
+          // It starts from 1 as index 0 is dependencies. This can be changed if needed
+          for (let i = 1; i < golemTargetKeys.length; i++){
+  
+            const val: any = golemTarget[golemTargetKeys[i] as keyof typeof golemTarget];
+            
+            // This gets the previous context. Array newContext is saving the context as we loop through the targets
+            const previousContext: string | undefined = newContext[0] || '';
+            
+            // Concat the previousContext (if undefined) to the current subtask (here, named val)
+            const content = previousContext + val;
 
-        const taskGenerationResponse = await ChatGPT_completion(taskGenerationMessages, model, 0.7, 0.9);
-        console.log('AI response for task_generation_prompt:', taskGenerationResponse);
+            // This block of code replaces the {{}} placeholders in the string from the yaml file 
+            // with the output of the subtask or task it requires
+            // For example, 
+            // best_year_for_genre:
+            //   dependencies: [ 'find_genre' ]
+            //   prompt: >
+            //     Find the best year for the musical genre "{{find_genre}}". Please provide a 4-digit number representing the year.
+            // Here, find_genre is replaced with the output of find_genre
+            const replacedString = content.replace(/{{(.*?)}}/g, (match, p1) => {
+              // Remove the curly braces from the placeholder
+              const placeholder = p1.trim();
+              // Replace the placeholder with the corresponding value from the map
+              return context.get(placeholder) || placeholder;
+            });
 
-        // Process the AI's response to extract new target information and add the new targets to the golemFile object
-        // Implement the logic to process the taskGenerationResponse and create new targets
-        // After processing and generating new targets, log them using the following line:
-        // console.log('New targets:', newTargets);
+            const taskGenerationMessages: ChatGPTMessage[] = [
+              {
+                role: 'system',
+                content: `You are a helpful assistant!`,
+              },
+              {
+                role: 'user',
+                content: replacedString,
+              },
+            ];
+  
+            const taskGenerationResponse = await ChatGPT_completion(taskGenerationMessages, model, 0.7, 0.9);
+            console.log(`AI response for ${val}:`, taskGenerationResponse);
+
+            newContext.length = 0; //clear the previous context
+            newContext.push(taskGenerationResponse); //append the new context to be used in the next iteration
+
+            context.set(target, taskGenerationResponse);
+          }
+  
+        } catch (error: any) {
+          logger.error(`Error generating AI response: ${error.message}`);
+        }  
       }
 
-    } catch (error: any) {
-      logger.error(`Error generating AI response: ${error.message}`);
-    }
-  } else {
+  }else {
     throw new Error(`No such supported model ${model}`);
   }
 }

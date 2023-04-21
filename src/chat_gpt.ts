@@ -5,6 +5,8 @@ export interface ChatGPTMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
+// My environment variable is saving the open ai api key as OPENAI_API_KEY not OPENAI_TOKEN. Commented for pull request
+// const OPENAI_TOKEN = process.env.OPENAI_API_KEY;
 
 const OPENAI_TOKEN = process.env.OPENAI_TOKEN;
 

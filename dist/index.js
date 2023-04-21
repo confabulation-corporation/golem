@@ -10,3 +10,4 @@ Object.defineProperty(exports, "executeTarget", { enumerable: true, get: functio
 var errors_1 = require("./errors");
 Object.defineProperty(exports, "GolemError", { enumerable: true, get: function () { return errors_1.GolemError; } });
 Object.defineProperty(exports, "handleGolemError", { enumerable: true, get: function () { return errors_1.handleGolemError; } });
+require('dotenv').config();

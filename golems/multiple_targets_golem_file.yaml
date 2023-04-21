@@ -7,7 +7,7 @@ greet_person:
   prompt: "{{get_greeting}} {{get_name}}."
 
 get_name:
-  prompt: "Provide a person's name."
+  prompt: "Say hi to Farhan."
 
 get_greeting:
-  prompt: "Generate a greeting word."
+  prompt: "Generate a random word starting with W."

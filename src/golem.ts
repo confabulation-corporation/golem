@@ -20,6 +20,7 @@ yargs
     async (argv) => {
       try {
         const golemFilePath = argv.golemFile as string;
+        // console.log(golemFilePath);
 
         // Add this line to create the .golem/ directory
         createGolemCacheDir();
@@ -27,6 +28,7 @@ yargs
         // Read the Golem file content
         const golemFileContent = fs.readFileSync(golemFilePath, 'utf8');
         const golemFile = parseGolemFile(golemFileContent);
+        console.log(golemFile);
 
         // Execute the default target with an empty context
         await executeTarget('default', golemFile, new Map());
