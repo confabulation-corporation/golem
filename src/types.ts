@@ -3,6 +3,7 @@ export interface GolemTarget {
   prompt: string;
   model?: string; // Add this line
   task_generation_prompt?: string; // Add this line
+  [key: string]: string[] | string | undefined;
 }
 export type GolemFile = {
   default: string[];

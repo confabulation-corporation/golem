@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
 
 export function generateCacheKey(target: string, dependencies: string[], furtherInstructionsArr: string[]): string {
@@ -22,7 +22,17 @@ export function isCacheValid(target: string, cacheKey: string): boolean {
 
 export function saveOutputToCache(target: string, cacheKey: string, context: Map<string, any>): void {
   const cachedOutputPath = getCachedOutputPath(target, cacheKey);
-  writeFileSync(cachedOutputPath, JSON.stringify(Object.fromEntries(context), null, 2), 'utf-8');
+  const defaultMap = new Map();
+  if (context.has("default")) {
+    defaultMap.set("default", context.get("default"));
+    writeFileSync(cachedOutputPath, JSON.stringify(Object.fromEntries(defaultMap), null, 2), 'utf-8');
+  }else{
+    writeFileSync(cachedOutputPath, JSON.stringify(Object.fromEntries(context), null, 2), 'utf-8');
+  }
+}
+
+export function appendToGolemFile(golemFilePath: string, target: string): void {
+  appendFileSync(golemFilePath, target, 'utf-8');
 }
 
 export function loadOutputFromCache(target: string, cacheKey: string): string {

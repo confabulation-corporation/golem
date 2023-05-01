@@ -31,7 +31,7 @@ yargs
         console.log(golemFile);
 
         // Execute the default target with an empty context
-        await executeTarget('default', golemFile, new Map());
+        await executeTarget('default', golemFile, golemFilePath, new Map());
       } catch (error: any) {
         logger.error(`Error: ${error.message}`);
       }
