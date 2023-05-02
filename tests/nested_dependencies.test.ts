@@ -8,7 +8,7 @@ describe('Nested dependencies test', () => {
     const golemFile = parseGolemFile(golemFileContent);
 
     const context = new Map();
-    await executeTarget('default', golemFile, context);
+    await executeTarget('default', golemFile, golemFileContent, context);
 
     expect(context.get('level_1')).toBe("Level 1 result: Level 2 result: Level 3 result: This is the final level.");
   });

@@ -3,12 +3,10 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } fr
 import { join } from 'path';
 
 export function generateCacheKey(target: string, dependencies: string[], furtherInstructionsArr: string[]): string {
-
   const stringToHash = JSON.stringify(furtherInstructionsArr);
   const inputString = `${target}:${dependencies.join(',')}_${stringToHash}`;
   const hash = createHash('sha1').update(inputString).digest('hex');
   return hash;
-  
 }
 
 export function getCachedOutputPath(target: string, cacheKey: string): string {
@@ -23,6 +21,7 @@ export function isCacheValid(target: string, cacheKey: string): boolean {
 export function saveOutputToCache(target: string, cacheKey: string, context: Map<string, any>): void {
   const cachedOutputPath = getCachedOutputPath(target, cacheKey);
   const defaultMap = new Map();
+
   if (context.has("default")) {
     defaultMap.set("default", context.get("default"));
     writeFileSync(cachedOutputPath, JSON.stringify(Object.fromEntries(defaultMap), null, 2), 'utf-8');
