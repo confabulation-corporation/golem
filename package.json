@@ -1,7 +1,7 @@
 {
   "name": "golem",
   "version": "1.0.0",
-  "description": "",
+  "description": "Golem is an AI-powered build system that leverages OpenAI to automate various tasks in the development process, such as code generation, refactoring, optimization, and code reviews. This version of Golem introduces dynamic task creation, allowing the system to adapt and generate new targets based on the outcomes of previous targets and the overall goal of the project.",
   "main": "index.js",
   "scripts": {
     "test": "jest",
@@ -32,7 +32,16 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node"
-  }
+  },
+  "directories": {
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Confabulation-Corporation/golem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Confabulation-Corporation/golem/issues"
+  },
+  "homepage": "https://github.com/Confabulation-Corporation/golem#readme"
 }
-
-

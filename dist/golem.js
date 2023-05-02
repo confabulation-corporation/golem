@@ -20,11 +20,13 @@ yargs_1.default
 }, async (argv) => {
     try {
         const golemFilePath = argv.golemFile;
+        // console.log(golemFilePath);
         // Add this line to create the .golem/ directory
         (0, utils_1.createGolemCacheDir)();
         // Read the Golem file content
         const golemFileContent = fs_1.default.readFileSync(golemFilePath, 'utf8');
         const golemFile = (0, parser_1.parseGolemFile)(golemFileContent);
+        console.log(golemFile);
         // Execute the default target with an empty context
         await (0, executor_1.executeTarget)('default', golemFile, new Map());
     }

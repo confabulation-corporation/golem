@@ -58,7 +58,7 @@ describe('Dynamic Task Creation', () => {
       golemFile['initial_task'].task_generation_prompt = 'Do not generate any new targets.';
     }
 
-    const initialContext = new Map();
+    const initialContext = new Map<string, any>();
     await executeTarget('initial_task', golemFile, initialContext);
     const newTargets = Object.keys(golemFile).filter(target => target !== 'default' && target !== 'initial_task');
     expect(newTargets.length).toBe(0);

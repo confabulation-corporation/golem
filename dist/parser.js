@@ -28,6 +28,7 @@ const yaml = __importStar(require("js-yaml"));
 function parseGolemFile(content) {
     try {
         const parsedContent = yaml.load(content);
+        // Update the parsing logic to handle the task_generation_prompt field
         return parsedContent;
     }
     catch (error) {

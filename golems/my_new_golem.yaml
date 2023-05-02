@@ -1,0 +1,28 @@
+default:
+  dependencies:
+    - initial_task
+    - new_task
+
+initial_task:
+  dependencies: []
+  prompt: "Create a Python function that adds two numbers."
+  # continued_prompt: >
+  #   Based on the outcome of the {{prompt}}, create function headers for other arithmetic operations involving division. Do not implement them.
+
+  task_generation_prompt: > 
+    Based on the outcome of the {{prompt}}, generate a new target (only one) to create functions for other arithmetic operations only involving division.
+
+  # prompt: > 
+  #   Generate new targets to create functions for other arithmetic operations only involving division.
+
+  # picking_random_target_prompt: "Pick one task from the list of generated targets at random and implement it in Python."
+
+imp_task:
+  dependencies: []
+  prompt: "Pick 2 numbers from 3, 5 and 6."
+
+new_task:
+  dependencies: 
+    - imp_task
+  prompt: >
+    From the numbers in "{{imp_task}}", choose a mathematical operation and perform it on them.
